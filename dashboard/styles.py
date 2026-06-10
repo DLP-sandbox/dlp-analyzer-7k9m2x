@@ -2838,6 +2838,37 @@ section[data-testid="stSidebar"] {
     .pulse-change { font-size: 0.58rem !important; }
 }
 
+/* ── PDF DOWNLOAD BUTTON — lead magnet ──────────────────────────────── */
+/* Targetea el download_button con key `pdf_dl_<ticker>` */
+[class*="st-key-pdf_dl_"] button {
+    background: linear-gradient(135deg, rgba(255,184,77,0.15), rgba(255,145,0,0.10)) !important;
+    border: 1px solid rgba(255,184,77,0.45) !important;
+    color: #FFB84D !important;
+    font-family: 'Inter', sans-serif !important;
+    font-weight: 700 !important;
+    font-size: 0.82rem !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.08em !important;
+    border-radius: 10px !important;
+    padding: 10px 16px !important;
+    box-shadow: 0 2px 12px rgba(255,184,77,0.10) !important;
+    transition: all 0.20s ease !important;
+    margin-top: 10px !important;
+    margin-bottom: 4px !important;
+}
+
+[class*="st-key-pdf_dl_"] button:hover {
+    background: linear-gradient(135deg, rgba(255,184,77,0.30), rgba(255,145,0,0.20)) !important;
+    border-color: rgba(255,184,77,0.80) !important;
+    color: #FFFFFF !important;
+    transform: translateY(-1px) !important;
+    box-shadow: 0 5px 22px rgba(255,184,77,0.30) !important;
+}
+
+[class*="st-key-pdf_dl_"] button:active {
+    transform: translateY(0) !important;
+}
+
 /* ── PASSWORD GATE — pantalla de login en cloud ─────────────────────── */
 .auth-gate-wrap {
     text-align: center;
