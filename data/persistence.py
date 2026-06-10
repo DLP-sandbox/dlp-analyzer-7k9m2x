@@ -1,9 +1,18 @@
 """
-Persistencia de análisis y scans a disco.
-Cada análisis se guarda en .history/analyses/{TICKER}.json y se recupera al abrir la app.
-Cada scan se guarda en .history/scans/scan_{YYYYMMDD_HHMMSS}.json con label legible.
+Persistencia de análisis y scans — Supabase Postgres en cloud,
+fallback a filesystem local cuando no hay credenciales.
+
+Si las variables SUPABASE_URL + SUPABASE_SERVICE_KEY están configuradas
+(via .env o st.secrets), todos los reads/writes van a Supabase. Es la
+única forma de tener persistencia real en Streamlit Cloud, porque su
+filesystem es efímero (se borra en cada restart del container).
+
+Cuando no hay Supabase, se sigue usando .history/analyses/*.json y
+.history/scans/scan_*.json para mantener el flujo de desarrollo local
+funcionando sin necesidad de configurar la database.
 """
 import json
+import os
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +21,14 @@ from typing import Optional
 HISTORY_DIR = Path(__file__).parent.parent / ".history"
 ANALYSES_DIR = HISTORY_DIR / "analyses"
 SCANS_DIR = HISTORY_DIR / "scans"
+
+# UID fijo — esta es una app single-user privada. Si en el futuro se
+# agrega auth multi-user, este uid pasa a ser el del usuario logueado.
+OWNER_UID = "owner"
+
+# Cache del cliente Supabase para evitar recrearlo en cada llamada.
+# Valores: None (no probado), False (probado y falló), instancia (OK).
+_SB_CLIENT = None
 
 SPANISH_MONTHS = {
     1: "enero",   2: "febrero", 3: "marzo",     4: "abril",
@@ -25,12 +42,79 @@ def _ensure_dirs() -> None:
     SCANS_DIR.mkdir(parents=True, exist_ok=True)
 
 
+def _supabase_client():
+    """Devuelve el cliente Supabase si está configurado. Cachea el resultado.
+
+    Lee credenciales en este orden:
+      1. os.environ (vía .env local con load_dotenv, o vía env vars cloud)
+      2. st.secrets (Streamlit Cloud)
+
+    Si no encuentra credenciales o falla la conexión, retorna None y el
+    código sigue usando los archivos locales del .history.
+    """
+    global _SB_CLIENT
+    if _SB_CLIENT is not None and _SB_CLIENT is not False:
+        return _SB_CLIENT
+    if _SB_CLIENT is False:
+        return None
+
+    url = os.environ.get("SUPABASE_URL")
+    key = (os.environ.get("SUPABASE_SERVICE_KEY")
+           or os.environ.get("SUPABASE_KEY"))
+
+    # Fallback a Streamlit secrets si no están en env
+    if not url or not key:
+        try:
+            import streamlit as st
+            if hasattr(st, "secrets"):
+                if not url:
+                    try:    url = st.secrets["SUPABASE_URL"]
+                    except Exception: pass
+                if not key:
+                    for k in ("SUPABASE_SERVICE_KEY", "SUPABASE_KEY"):
+                        try:
+                            key = st.secrets[k]
+                            break
+                        except Exception:
+                            continue
+        except Exception:
+            pass
+
+    if not url or not key:
+        _SB_CLIENT = False
+        return None
+
+    try:
+        from supabase import create_client
+        # Normalizar URL: a veces el usuario pega con trailing /rest/v1/
+        url = str(url).strip()
+        for suffix in ("/rest/v1/", "/rest/v1", "/"):
+            if url.endswith(suffix):
+                url = url[:-len(suffix)]
+        _SB_CLIENT = create_client(url, str(key).strip())
+        return _SB_CLIENT
+    except Exception as e:
+        _log_persistence_error("supabase_client_init", e)
+        _SB_CLIENT = False
+        return None
+
+
 def _make_json_safe(obj):
     """Convierte recursivamente cualquier objeto a tipos JSON-safe.
-    Esto es CRÍTICO porque algunos agents guardan en raw_data dicts con
-    claves de pandas.Timestamp que json.dumps NO puede serializar
-    (las claves deben ser str/int/float/bool/None)."""
-    if obj is None or isinstance(obj, (str, int, float, bool)):
+
+    Esto es CRÍTICO porque:
+    1. Algunos agents guardan dicts con claves de pandas.Timestamp que
+       json.dumps NO puede serializar (claves deben ser str/int/float/bool/None).
+    2. NaN/Infinity son válidos en Python float pero NO en JSON estándar
+       (lo cual rompe Supabase/Postgres). Los convertimos a None.
+    """
+    import math
+    if obj is None or isinstance(obj, (str, bool)):
+        return obj
+    if isinstance(obj, (int, float)):
+        # Filtrar NaN, +Inf, -Inf → None (JSON-compliant)
+        if isinstance(obj, float) and (math.isnan(obj) or math.isinf(obj)):
+            return None
         return obj
     if isinstance(obj, dict):
         return {str(k): _make_json_safe(v) for k, v in obj.items()}
@@ -42,6 +126,12 @@ def _make_json_safe(obj):
             return _make_json_safe(obj.to_dict())
         except Exception:
             return str(obj)
+    # numpy types — tienen .item() para convertir a python nativo
+    if hasattr(obj, "item") and callable(obj.item):
+        try:
+            return _make_json_safe(obj.item())
+        except Exception:
+            pass
     # pandas Timestamp, datetime, etc. → str
     return str(obj)
 
@@ -66,16 +156,42 @@ def _log_persistence_error(context: str, exc: Exception) -> None:
 # ── ANALYSES ──────────────────────────────────────────────────────────────
 
 def save_analysis(analysis) -> None:
-    """Guarda un StockAnalysis en disco bajo .history/analyses/{TICKER}.json"""
+    """Guarda un StockAnalysis. Prioriza Supabase si está configurado,
+    siempre guarda también una copia local como backup."""
+    ticker = getattr(analysis, "ticker", "?")
+    safe_dict = _make_json_safe(analysis.to_dict())
+
+    # 1. Supabase (cloud — sobrevive a restart del container)
+    sb = _supabase_client()
+    if sb is not None:
+        try:
+            sb.table("user_analyses").upsert({
+                "uid":        OWNER_UID,
+                "ticker":     ticker,
+                "data":       safe_dict,
+                "updated_at": datetime.now().isoformat(),
+            }).execute()
+        except Exception as e:
+            _log_persistence_error(f"sb_save_analysis:{ticker}", e)
+
+    # 2. Local file (siempre, como backup — útil para desarrollo offline)
     try:
         _ensure_dirs()
-        path = ANALYSES_DIR / f"{analysis.ticker}.json"
-        path.write_text(_safe_json_dumps(analysis.to_dict()))
+        path = ANALYSES_DIR / f"{ticker}.json"
+        path.write_text(_safe_json_dumps(safe_dict))
     except Exception as e:
-        _log_persistence_error(f"save_analysis:{getattr(analysis, 'ticker', '?')}", e)
+        _log_persistence_error(f"save_analysis:{ticker}", e)
 
 
 def delete_analysis(ticker: str) -> None:
+    sb = _supabase_client()
+    if sb is not None:
+        try:
+            sb.table("user_analyses").delete().eq(
+                "uid", OWNER_UID).eq("ticker", ticker).execute()
+        except Exception as e:
+            _log_persistence_error(f"sb_delete_analysis:{ticker}", e)
+
     path = ANALYSES_DIR / f"{ticker}.json"
     if path.exists():
         try:
@@ -85,9 +201,25 @@ def delete_analysis(ticker: str) -> None:
 
 
 def load_all_analyses() -> dict:
-    """Devuelve dict {ticker: StockAnalysis} reconstruido desde disco."""
-    _ensure_dirs()
+    """Devuelve dict {ticker: StockAnalysis}. Lee de Supabase si está
+    configurado; si no, del filesystem local."""
     result = {}
+
+    sb = _supabase_client()
+    if sb is not None:
+        try:
+            rows = sb.table("user_analyses").select("ticker,data").eq(
+                "uid", OWNER_UID).execute()
+            for row in (rows.data or []):
+                obj = stock_analysis_from_dict(row.get("data") or {})
+                if obj is not None:
+                    result[obj.ticker] = obj
+            return result
+        except Exception as e:
+            _log_persistence_error("sb_load_all_analyses", e)
+            # cae al fallback local
+
+    _ensure_dirs()
     for path in sorted(ANALYSES_DIR.glob("*.json")):
         try:
             data = json.loads(path.read_text())
@@ -177,9 +309,9 @@ def save_scan(scan_results) -> Optional[str]:
     if not scan_results:
         return None
     try:
-        _ensure_dirs()
         now = datetime.now()
         scan_id = now.strftime("%Y%m%d_%H%M%S")
+        label = scan_label(now)
 
         results_data = []
         for r in scan_results:
@@ -194,11 +326,29 @@ def save_scan(scan_results) -> Optional[str]:
         data = {
             "scan_id":   scan_id,
             "timestamp": now.isoformat(),
-            "label":     scan_label(now),
+            "label":     label,
             "count":     len(scan_results),
             "results":   results_data,
         }
-        (SCANS_DIR / f"scan_{scan_id}.json").write_text(_safe_json_dumps(data))
+        safe_data = _make_json_safe(data)
+
+        # 1. Supabase
+        sb = _supabase_client()
+        if sb is not None:
+            try:
+                sb.table("user_scans").upsert({
+                    "uid":     OWNER_UID,
+                    "scan_id": scan_id,
+                    "label":   label,
+                    "count":   len(scan_results),
+                    "data":    safe_data,
+                }).execute()
+            except Exception as e:
+                _log_persistence_error(f"sb_save_scan:{scan_id}", e)
+
+        # 2. Local file backup
+        _ensure_dirs()
+        (SCANS_DIR / f"scan_{scan_id}.json").write_text(_safe_json_dumps(safe_data))
         return scan_id
     except Exception as e:
         _log_persistence_error("save_scan", e)
@@ -206,9 +356,28 @@ def save_scan(scan_results) -> Optional[str]:
 
 
 def load_all_scans_meta() -> list[dict]:
-    """Devuelve metadata de todos los scans (sin cargar results), ordenados desc por fecha."""
-    _ensure_dirs()
+    """Metadata de todos los scans (sin cargar results), ordenados desc por fecha."""
     metas = []
+
+    sb = _supabase_client()
+    if sb is not None:
+        try:
+            rows = sb.table("user_scans").select(
+                "scan_id,label,count,data,created_at").eq(
+                "uid", OWNER_UID).order("created_at", desc=True).execute()
+            for row in (rows.data or []):
+                d = row.get("data") or {}
+                metas.append({
+                    "scan_id":   row.get("scan_id") or d.get("scan_id"),
+                    "timestamp": d.get("timestamp") or row.get("created_at"),
+                    "label":     row.get("label") or d.get("label"),
+                    "count":     row.get("count") or d.get("count", 0),
+                })
+            return metas
+        except Exception as e:
+            _log_persistence_error("sb_load_all_scans_meta", e)
+
+    _ensure_dirs()
     for path in SCANS_DIR.glob("scan_*.json"):
         try:
             data = json.loads(path.read_text())
@@ -253,6 +422,24 @@ def get_scan_history_labels() -> list[tuple]:
 def load_scan_by_id(scan_id: str) -> list:
     """Carga los ScreenerResult de un scan específico."""
     from agents.screener import ScreenerResult
+
+    sb = _supabase_client()
+    if sb is not None:
+        try:
+            rows = sb.table("user_scans").select("data").eq(
+                "uid", OWNER_UID).eq("scan_id", scan_id).limit(1).execute()
+            if rows.data:
+                data = (rows.data[0].get("data") or {})
+                results = []
+                for r in data.get("results", []):
+                    try:
+                        results.append(ScreenerResult(**r))
+                    except Exception:
+                        continue
+                return results
+        except Exception as e:
+            _log_persistence_error(f"sb_load_scan_by_id:{scan_id}", e)
+
     path = SCANS_DIR / f"scan_{scan_id}.json"
     if not path.exists():
         return []
@@ -270,6 +457,14 @@ def load_scan_by_id(scan_id: str) -> list:
 
 
 def delete_scan(scan_id: str) -> None:
+    sb = _supabase_client()
+    if sb is not None:
+        try:
+            sb.table("user_scans").delete().eq(
+                "uid", OWNER_UID).eq("scan_id", scan_id).execute()
+        except Exception as e:
+            _log_persistence_error(f"sb_delete_scan:{scan_id}", e)
+
     path = SCANS_DIR / f"scan_{scan_id}.json"
     if path.exists():
         try:

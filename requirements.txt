@@ -19,3 +19,6 @@ reportlab>=4.0
 kaleido==0.2.1
 Pillow>=10.0
 qrcode[pil]>=7.4
+
+# Cloud persistence (Supabase Postgres) — sobrevive a reinicios del container
+supabase>=2.0
