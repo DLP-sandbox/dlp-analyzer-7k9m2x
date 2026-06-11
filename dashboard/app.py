@@ -645,8 +645,9 @@ def run_analysis(ticker: str):
     loading_placeholder = st.empty()
     status_container = st.empty()
 
-    # 8 agentes × 2 eventos (Analizando + Completado) = 16 ticks + Orquestador = 17
-    TOTAL_TICKS = 17
+    # 6 agentes × 2 eventos (Analizando + Completado) = 12 ticks + Orquestador = 13
+    # (macro+sentiment+catalysts ahora son 1 solo agente combinado: market_context)
+    TOTAL_TICKS = 13
     progress_count = [0.0]
     current_agent = [""]
     synthesis_started = [False]
@@ -872,17 +873,17 @@ def _render_status_pills(pills):
             """, unsafe_allow_html=True)
 
 
-def _render_pros_cons(report, pros_title="💪 Señales Positivas", cons_title="⚠️ Señales Negativas"):
+def _render_pros_cons(report, pros_title="💪 Top 3 Señales Positivas", cons_title="⚠️ Top 3 Señales Negativas"):
     col_p, col_c = st.columns(2)
     with col_p:
         if report.pros:
             st.markdown(f'<div class="thesis-section-title strength">{pros_title}</div>', unsafe_allow_html=True)
-            for p in report.pros:
+            for p in report.pros[:3]:          # ← cap a 3
                 st.markdown(f'<div class="strength-item">{p}</div>', unsafe_allow_html=True)
     with col_c:
         if report.cons:
             st.markdown(f'<div class="thesis-section-title risk">{cons_title}</div>', unsafe_allow_html=True)
-            for c in report.cons:
+            for c in report.cons[:3]:          # ← cap a 3
                 st.markdown(f'<div class="risk-item">{c}</div>', unsafe_allow_html=True)
 
 
@@ -1463,8 +1464,8 @@ def render_technical(analysis: StockAnalysis):
 
     # ── Señales alcistas / bajistas (cards) ──
     _render_pros_cons(tech_report,
-                      pros_title="📈 Señales Alcistas",
-                      cons_title="📉 Señales Bajistas")
+                      pros_title="📈 Top 3 Señales Alcistas",
+                      cons_title="📉 Top 3 Señales Bajistas")
 
     # ── Análisis textual ──
     _render_analysis_card(tech_report, title="Análisis Técnico Completo")
@@ -1757,8 +1758,8 @@ def render_future(analysis: StockAnalysis):
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
-                      pros_title="🚀 Ventajas Futuras",
-                      cons_title="⚠️ Riesgos Estructurales")
+                      pros_title="🚀 Top 3 Ventajas Futuras",
+                      cons_title="⚠️ Top 3 Riesgos Estructurales")
 
     # ── Insight: Future Thesis ──
     _render_insight_card("Tesis a 5 años", rd.get("future_thesis", ""),
@@ -1970,8 +1971,8 @@ def render_catalysts(analysis: StockAnalysis):
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
-                      pros_title="✅ Catalizadores Alcistas",
-                      cons_title="⚠️ Riesgos de Evento")
+                      pros_title="✅ Top 3 Catalizadores Alcistas",
+                      cons_title="⚠️ Top 3 Riesgos de Evento")
 
     _render_analysis_card(report, title="Análisis de Catalizadores")
 
@@ -2071,8 +2072,8 @@ def render_macro(analysis: StockAnalysis):
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
-                      pros_title="🌤️ Vientos de Cola",
-                      cons_title="🌪️ Vientos en Contra")
+                      pros_title="🌤️ Top 3 Vientos de Cola",
+                      cons_title="🌪️ Top 3 Vientos en Contra")
 
     # ── Macro verdict ──
     _render_insight_card("Veredicto Macro", rd.get("macro_verdict", ""),
@@ -2135,8 +2136,8 @@ def render_sentiment(analysis: StockAnalysis):
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
-                      pros_title="📈 Señales Positivas de Sentimiento",
-                      cons_title="📉 Riesgos de Narrativa")
+                      pros_title="📈 Top 3 Señales Positivas de Sentimiento",
+                      cons_title="📉 Top 3 Riesgos de Narrativa")
 
     # ── Narrativa dominante ──
     _render_insight_card("Narrativa Dominante", rd.get("dominant_narrative", ""),
@@ -2232,8 +2233,8 @@ def render_risk(analysis: StockAnalysis):
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
-                      pros_title="✅ Aspectos Favorables del Riesgo",
-                      cons_title="⚠️ Riesgos Identificados")
+                      pros_title="✅ Top 3 Aspectos Favorables del Riesgo",
+                      cons_title="⚠️ Top 3 Riesgos Identificados")
 
     _render_analysis_card(report, title="Análisis Completo de Riesgo")
 
@@ -2288,12 +2289,12 @@ def render_agent_tab(analysis: StockAnalysis, agent_key: str):
         with col_p:
             if report.pros:
                 st.markdown("**Positivos**")
-                for p in report.pros:
+                for p in report.pros[:3]:
                     st.markdown(f'<div style="color:#00FF88;font-size:0.82rem;padding:2px 0;">✓ {p}</div>', unsafe_allow_html=True)
         with col_c:
             if report.cons:
                 st.markdown("**Riesgos / Negativos**")
-                for c in report.cons:
+                for c in report.cons[:3]:
                     st.markdown(f'<div style="color:#FF3B5C;font-size:0.82rem;padding:2px 0;">⚠ {c}</div>', unsafe_allow_html=True)
 
         # Key metrics
@@ -3284,9 +3285,7 @@ def main():
         "💰 Fundamentales",
         "🔭 Futuro",
         "🏦 Smart Money",
-        "⚡ Catalizadores",
-        "🌍 Macro",
-        "📰 Sentimiento",
+        "🌐 Contexto del Mercado",
         "⚖️ Riesgo",
     ])
 
@@ -3301,12 +3300,19 @@ def main():
     with tabs[4]:
         render_institutional(analysis)
     with tabs[5]:
+        # Contexto del Mercado = Catalizadores + Macro + Sentimiento.
+        # Cada render function se mantiene INTACTA (todas sus gráficas/tiles/gauge).
+        # Los 3 reportes vienen ahora del agente combinado market_context, pero con
+        # estructura idéntica, así que cada render sigue leyendo reports["catalysts"],
+        # reports["macro"] y reports["sentiment"] sin cambios.
         render_catalysts(analysis)
-    with tabs[6]:
+        st.markdown('<div style="margin:28px 0;border-top:1px solid #1E2530;"></div>',
+                    unsafe_allow_html=True)
         render_macro(analysis)
-    with tabs[7]:
+        st.markdown('<div style="margin:28px 0;border-top:1px solid #1E2530;"></div>',
+                    unsafe_allow_html=True)
         render_sentiment(analysis)
-    with tabs[8]:
+    with tabs[6]:
         render_risk(analysis)
 
 

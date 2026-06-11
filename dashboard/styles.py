@@ -3152,6 +3152,7 @@ AGENT_ICONS = {
     "Catalizadores":     "⚡",
     "Macro & Sector":    "🌍",
     "Sentimiento":       "📰",
+    "Contexto de Mercado": "🌐",
     "Riesgo & Sizing":   "⚖️",
     "Orquestador":       "👔",
 }
