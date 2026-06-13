@@ -457,6 +457,222 @@ def _simplify_lang(text: str) -> str:
     return out
 
 
+# ── Traducción de VALORES de métricas (inglés → español, sin API) ────────
+# El análisis guarda muchos valores categóricos en inglés (wide, risk-on,
+# improving, Stage 2…). Aquí los pasamos a español simple para el PDF.
+_VALUE_EXACT = {
+    # moat / futuro
+    "wide": "amplia", "narrow": "limitada", "none": "sin ventaja",
+    "low": "bajo", "medium": "medio", "high": "alto", "critical": "crítico",
+    "excellent": "excelente", "good": "buena", "average": "promedio", "poor": "pobre",
+    "platform": "plataforma", "saas": "suscripción", "marketplace": "mercado",
+    "traditional": "tradicional", "commodity": "materia prima", "other": "otro",
+    "expanding rapidly": "crece rápido", "expanding": "en expansión",
+    "stable": "estable", "contracting": "encogiéndose",
+    # macro
+    "risk-on": "apetito riesgo", "neutral": "neutral", "risk-off": "aversión",
+    "high negative": "alta (neg.)", "high positive": "alta (pos.)",
+    "strong": "fuerte", "weak": "débil",
+    "low <20": "bajo", "elevated 20-30": "moderado", "high >30": "alto",
+    "normal": "normal", "flat": "plana", "inverted": "invertida",
+    "favorable": "favorable", "unfavorable": "desfavorable",
+    # sentimiento / institucional / catalizadores
+    "very bullish": "muy positivo", "bullish": "positivo",
+    "very bearish": "muy negativo", "bearish": "negativo",
+    "improving": "mejorando", "deteriorating": "empeorando",
+    "accumulating": "acumulando", "distributing": "distribuyendo",
+    "turnaround": "recuperación", "defensivo": "defensivo",
+    "buy the fear": "comprar miedo", "sell the hype": "vender euforia",
+    "no signal": "sin señal",
+    "expanding": "en expansión",
+}
+_VALUE_WORDS = [
+    (r"\bStage\b", "Fase"), (r"\bstage\b", "fase"),
+    (r"\bdel float\b", "del total"), (r"\bfloat\b", "flotante"),
+    (r"\bYoY\b", "interanual"), (r"\bforward\b", "estimado"),
+    (r"\btrailing\b", "histórico"), (r"\bhistogram\b", "histograma"),
+    (r"\bbeats?\b", "aciertos"), (r"\bswing low\b", "mínimo reciente"),
+    (r"\bbullish\b", "positivo"), (r"\bbearish\b", "negativo"),
+    (r"\bcontracting\b", "en descenso"), (r"\bexpanding\b", "en aumento"),
+]
+
+
+def _es_value(v, default="—"):
+    """Traduce un valor de métrica a español simple. Tolerante a None/strings."""
+    if v in (None, "", "N/A", "—"):
+        return default
+    import re as _re_v
+    s = str(v).strip()
+    low = s.lower()
+    if low in _VALUE_EXACT:
+        return _VALUE_EXACT[low]
+    out = s
+    for pat, rep in _VALUE_WORDS:
+        out = _re_v.sub(pat, rep, out)
+    return out
+
+
+# ── Sectores (inglés de la fuente de datos → español) ───────────────────
+_SECTOR_ES = {
+    "technology": "Tecnología",
+    "healthcare": "Salud",
+    "financial services": "Servicios financieros",
+    "consumer cyclical": "Consumo cíclico",
+    "consumer defensive": "Consumo defensivo",
+    "communication services": "Comunicaciones",
+    "industrials": "Industria",
+    "energy": "Energía",
+    "real estate": "Bienes raíces",
+    "utilities": "Servicios públicos",
+    "basic materials": "Materiales básicos",
+}
+
+
+def _es_sector(s):
+    if not s:
+        return "—"
+    return _SECTOR_ES.get(str(s).strip().lower(), str(s))
+
+
+# ── Conclusiones simples por dimensión (cero narración de datos) ─────────
+def _tier(score):
+    s = _to_float(score, default=50.0)
+    return "alto" if s >= 62 else "medio" if s >= 45 else "bajo"
+
+
+_CONCLUSIONS = {
+    "fundamentals": {
+        "alto": "La empresa gana dinero de forma sólida y constante. Sus finanzas son sanas.",
+        "medio": "La empresa es rentable, pero tiene algún punto financiero por mejorar.",
+        "bajo": "Sus finanzas muestran debilidades: la rentabilidad o la deuda preocupan.",
+    },
+    "technical": {
+        "alto": "El precio viene subiendo de forma sostenida. La tendencia la acompaña.",
+        "medio": "El precio se mueve de lado, sin una dirección clara por ahora.",
+        "bajo": "El precio viene débil o de bajada. Conviene esperar a que se estabilice.",
+    },
+    "future": {
+        "alto": "Tiene una ventaja difícil de copiar y espacio para crecer por años.",
+        "medio": "Es un negocio viable, pero su ventaja a largo plazo no es del todo clara.",
+        "bajo": "Hay dudas reales sobre qué tan fuerte será este negocio en el futuro.",
+    },
+    "institutional": {
+        "alto": "Los grandes inversores están comprando y respaldan la acción.",
+        "medio": "Los grandes inversores están a la expectativa, sin un movimiento claro.",
+        "bajo": "Por ahora hay poco respaldo de los grandes inversores.",
+    },
+    "catalysts": {
+        "alto": "Tiene eventos cercanos (como resultados) que pueden impulsar el precio.",
+        "medio": "Tiene algunos eventos por delante, pero sin un impulso claro inmediato.",
+        "bajo": "No se ven eventos importantes que muevan el precio en el corto plazo.",
+    },
+    "macro": {
+        "alto": "El entorno general del mercado juega a su favor.",
+        "medio": "El entorno general del mercado está neutro para la empresa.",
+        "bajo": "El entorno general del mercado juega en su contra ahora mismo.",
+    },
+    "sentiment": {
+        "alto": "El ánimo y las noticias sobre la empresa son positivos.",
+        "medio": "El ánimo del mercado sobre la empresa es neutral.",
+        "bajo": "El ánimo y las noticias sobre la empresa son negativos.",
+    },
+    "risk": {
+        "alto": "Lo que puede ganar supera con claridad a lo que puede perder.",
+        "medio": "El posible premio y el posible riesgo están bastante parejos hoy.",
+        "bajo": "Hoy se arriesga más de lo que se puede ganar. Mejor esperar un precio más bajo.",
+    },
+}
+
+
+def _conclusion(rkey, score):
+    """Conclusión simple en español para una dimensión, según su puntaje."""
+    table = _CONCLUSIONS.get(rkey)
+    if not table:
+        return ""
+    return table[_tier(score)]
+
+
+def _score_tag(score):
+    """Etiqueta corta del resultado, en español."""
+    s = _to_float(score, default=50.0)
+    if s >= 70: return "Resultado: muy bueno"
+    if s >= 55: return "Resultado: bueno"
+    if s >= 45: return "Resultado: regular"
+    return "Resultado: débil"
+
+
+# ── Fortalezas y debilidades automáticas (conclusiones, no datos) ───────
+_SW_TEXT = {
+    "fundamentals": ("Finanzas sólidas: gana dinero de forma constante y sin depender de deuda.",
+                     "Finanzas flojas: su rentabilidad o su deuda son un punto débil."),
+    "future":       ("Buen futuro: tiene una ventaja difícil de copiar y espacio para crecer.",
+                     "Futuro incierto: su ventaja competitiva no es clara."),
+    "technical":    ("El precio acompaña: viene en una tendencia positiva.",
+                     "El precio no acompaña: viene débil o de bajada."),
+    "institutional":("Los grandes inversores respaldan la acción.",
+                     "Poco respaldo de los grandes inversores por ahora."),
+    "catalysts":    ("Tiene eventos cercanos que pueden impulsar el precio.",
+                     "Le faltan eventos claros que impulsen el precio pronto."),
+    "macro":        ("El entorno general del mercado la acompaña.",
+                     "El entorno general del mercado juega en su contra."),
+    "sentiment":    ("El ánimo del mercado hacia la empresa es positivo.",
+                     "El ánimo del mercado hacia la empresa es negativo."),
+    "risk":         ("Buena relación entre lo que puede ganar y lo que puede perder.",
+                     "Hoy se arriesga más de lo que se puede ganar: mejor esperar mejor precio."),
+}
+
+
+def _auto_strengths_weaknesses(a):
+    """Genera fortalezas y debilidades como conclusiones simples en español,
+    a partir de los puntajes de cada dimensión (no narra los datos crudos)."""
+    sb = a.score_breakdown or {}
+    dims = [(k, _to_float(sb.get(k), default=50.0)) for k in _SW_TEXT.keys()]
+
+    strengths = [_SW_TEXT[k][0] for k, s in sorted(dims, key=lambda kv: kv[1], reverse=True) if s >= 60]
+    weaknesses = [_SW_TEXT[k][1] for k, s in sorted(dims, key=lambda kv: kv[1]) if s <= 50]
+
+    # Debilidad extra por valoración cara (concreta y fácil de entender)
+    fund = (a.reports or {}).get("fundamentals")
+    pe = _to_float((fund.key_metrics or {}).get("pe_ratio")) if fund else None
+    if pe is not None and pe > 28:
+        weaknesses.insert(0, "La acción no está barata hoy: pagas bastante por lo que la empresa gana.")
+
+    # Garantizar al menos 2 de cada uno (si faltan, usar extremos)
+    if len(strengths) < 2:
+        for k, s in sorted(dims, key=lambda kv: kv[1], reverse=True):
+            t = _SW_TEXT[k][0]
+            if t not in strengths:
+                strengths.append(t)
+            if len(strengths) >= 2:
+                break
+    if len(weaknesses) < 2:
+        for k, s in sorted(dims, key=lambda kv: kv[1]):
+            t = _SW_TEXT[k][1]
+            if t not in weaknesses:
+                weaknesses.append(t)
+            if len(weaknesses) >= 2:
+                break
+
+    return strengths[:4], weaknesses[:4]
+
+
+def _alpha_simple(a):
+    """Frase breve y simple para el hero, según la recomendación."""
+    rec = (a.recommendation or "").upper()
+    if rec in ("MUY ATRACTIVO", "STRONG BUY"):
+        return "Oportunidad atractiva: la calidad del negocio y el precio acompañan."
+    if rec in ("ATRACTIVO", "BUY"):
+        return "Buena empresa con un punto de entrada razonable."
+    if rec in ("EVITAR", "PASS"):
+        return "Por ahora no luce como oportunidad. Mejor esperar."
+    return "Buena empresa; conviene esperar un mejor precio de entrada."
+
+
+def _horizon_simple(a):
+    """Horizonte en lenguaje simple."""
+    return "Pensado para el largo plazo (años)"
+
+
 def _truncate_text(s: str, max_chars: int, ellipsis: str = "…") -> str:
     """Trunca un string a max_chars sin cortar palabras (siempre que pueda).
     Útil para campos del LLM que vienen con explicaciones largas."""
@@ -667,7 +883,7 @@ def _page_1_synthesis(c, a):
          r=14, fill=BG_CARD, stroke=ORANGE, stroke_w=1)
 
     # Brand top-right
-    _text(c, "◈  DLP MARKET ANALYZER", PAGE_W - MARGIN_X - 28, hero_top + 26,
+    _text(c, "◈  ANALIZADOR DLP", PAGE_W - MARGIN_X - 28, hero_top + 26,
           font=FONT_MONO_BOLD, size=12, color=ORANGE, anchor="right")
     _text(c, _safe(a.timestamp)[:10], PAGE_W - MARGIN_X - 28, hero_top + 46,
           font=FONT_MONO, size=11, color=TEXT_LO, anchor="right")
@@ -682,15 +898,14 @@ def _page_1_synthesis(c, a):
     company = (a.company_name or a.ticker)[:50]
     _text(c, company, tx, hero_top + 175, font=FONT_BOLD, size=22, color=TEXT_HI)
 
-    horizon = _truncate_text(_safe(a.time_horizon, "no definido"), max_chars=40)
-    sub = f"{_safe(a.sector)}   ·   Horizonte: {horizon}"
+    sub = f"{_es_sector(a.sector)}   ·   {_horizon_simple(a)}"
     left_w = right_zone_x - tx - 30
     _wrap(c, sub, tx, hero_top + 204, width=left_w,
           font=FONT_REG, size=16, color=TEXT_LO,
           line_height=1.3, max_lines=1)
 
-    # Brief alpha opportunity (1 oración) — sustituye al gran tesis del centro
-    alpha_brief = _truncate_by_sentence(getattr(a, "alpha_opportunity", "") or "", 180)
+    # Conclusión breve y simple (en español, generada por código)
+    alpha_brief = _alpha_simple(a)
     if alpha_brief:
         _wrap(c, alpha_brief, tx, hero_top + 230, width=left_w,
               font=FONT_REG, size=14, color=GOLD,
@@ -702,7 +917,7 @@ def _page_1_synthesis(c, a):
     _text(c, f"{sc_f:.1f}" if sc_f is not None else "—",
           PAGE_W - MARGIN_X - 60, hero_top + 130,
           font=FONT_DISPLAY_XL, size=84, color=sc_color, anchor="right")
-    _text(c, "COMPOSITE  /  100", PAGE_W - MARGIN_X - 60, hero_top + 168,
+    _text(c, "PUNTAJE GLOBAL  /  100", PAGE_W - MARGIN_X - 60, hero_top + 168,
           font=FONT_DISPLAY, size=12, color=TEXT_LO, anchor="right")
 
     # Recommendation badge + conviction
@@ -739,7 +954,7 @@ def _page_1_synthesis(c, a):
     p1_x = MARGIN_X
     _box(c, p1_x, mid_top, panel_w, mid_h, r=12,
          fill=BG_CARD, stroke=BORDER, stroke_w=1)
-    _text(c, "DLP SCORE", p1_x + 28, mid_top + 38,
+    _text(c, "PUNTAJE DLP", p1_x + 28, mid_top + 38,
           font=FONT_DISPLAY, size=19, color=TEXT_LO)
     _text(c, rec.upper(), p1_x + 28, mid_top + 64,
           font=FONT_DISPLAY, size=14, color=fill_c)
@@ -756,7 +971,7 @@ def _page_1_synthesis(c, a):
         )
         try:
             g_fig.update_traces(
-                title=None,
+                title={"text": ""},
                 gauge=dict(
                     axis=dict(tickfont=dict(size=26, color="#7A8898")),
                     # Glow: bar más gruesa + bordes brillantes en el threshold
@@ -804,7 +1019,7 @@ def _page_1_synthesis(c, a):
         # Sobrescribir labels: cortas, sin emojis, sin <b>N</b> embebido.
         # CRECIMIENTO/MOMENTUM se acortan a 7 chars para que NO se corten
         # contra el borde del card al renderizarse con font huge.
-        _short = ["VALOR", "CALIDAD", "CRECIM.", "MOMENT.", "FUTURO"]
+        _short = ["VALOR", "CALIDAD", "CRECIM.", "IMPULSO", "FUTURO"]
         _short_closed = _short + [_short[0]]
         for tr in sf_fig.data:
             if hasattr(tr, "theta") and tr.theta:
@@ -910,12 +1125,16 @@ def _page_1_synthesis(c, a):
          fill=BG_CARD, stroke=BORDER, stroke_w=1)
     _text(c, "DESGLOSE POR ANÁLISIS", p3_x + 28, mid_top + 38,
           font=FONT_DISPLAY, size=19, color=TEXT_LO)
-    _text(c, "8 AGENTES · 0–100 c/u", p3_x + 28, mid_top + 64,
+    _text(c, "8 ANÁLISIS · 0–100 c/u", p3_x + 28, mid_top + 64,
           font=FONT_REG, size=14, color=TEXT_DIM)
 
     try:
         from dashboard.charts import build_score_breakdown
         sb_fig = build_score_breakdown(a.score_breakdown or {})
+        # Etiqueta en español (la app la nombra "Smart Money" en inglés)
+        for _tr in sb_fig.data:
+            if getattr(_tr, "y", None):
+                _tr.y = [str(_yy).replace("Smart Money", "Institucional") for _yy in _tr.y]
         sb_fig.update_layout(
             paper_bgcolor="#141920", plot_bgcolor="#141920",
             # Margin izquierda XL para que los nombres de los agentes
@@ -958,7 +1177,7 @@ def _page_1_synthesis(c, a):
             ("Fundamentales", sb.get("fundamentals", 50)),
             ("Técnico",       sb.get("technical",    50)),
             ("Futuro",        sb.get("future",       50)),
-            ("Smart Money",   sb.get("institutional",50)),
+            ("Institucional", sb.get("institutional",50)),
             ("Catalizadores", sb.get("catalysts",    50)),
             ("Macro",         sb.get("macro",        50)),
             ("Sentimiento",   sb.get("sentiment",    50)),
@@ -1209,6 +1428,13 @@ def _page_2_finance_technical(c, a):
                 # Limpiar si trae "/" o "("
                 if "/" in s: s = s.split("/")[0].strip()
                 if "(" in s: s = s.split("(")[0].strip()
+                s = _es_value(s)
+                # Estos KPIs son numéricos: quedarnos solo con el número + unidad
+                # (ej "16.6% interanual" → "16.6%"); la etiqueta ya da el contexto.
+                import re as _re_kml
+                mnum = _re_kml.match(r"[~+\-]?\$?\d[\d.,]*\s*[%x]?", s)
+                if mnum and mnum.group(0).strip():
+                    s = mnum.group(0).strip()
                 if len(s) > 14: s = s[:13] + "…"
                 return s
         return default
@@ -1343,7 +1569,7 @@ def _page_3_pillars(c, a):
     sb_h = 120
     _box(c, MARGIN_X, sb_top, PAGE_W - 2*MARGIN_X, sb_h, r=12,
          fill=BG_CARD, stroke=BORDER, stroke_w=1)
-    _text(c, "SCORES  ·  8 DIMENSIONES",
+    _text(c, "PUNTAJES  ·  8 DIMENSIONES",
           MARGIN_X + 32, sb_top + 34,
           font=FONT_DISPLAY, size=17, color=ORANGE)
 
@@ -1353,7 +1579,7 @@ def _page_3_pillars(c, a):
         ("Fundamentales", sb.get("fundamentals", 50)),
         ("Técnico",       sb.get("technical",    50)),
         ("Futuro",        sb.get("future",       50)),
-        ("Smart Money",   sb.get("institutional",50)),
+        ("Institucional", sb.get("institutional",50)),
         ("Catalizadores", sb.get("catalysts",    50)),
         ("Macro",         sb.get("macro",        50)),
         ("Sentimiento",   sb.get("sentiment",    50)),
@@ -1401,18 +1627,16 @@ def _page_3_pillars(c, a):
             v = (rpt.key_metrics or {}).get(k)
             if v not in (None, "", "N/A"):
                 s = str(v).strip()
-                # Truncación fuerte — los KPIs en card deben ser cortos
-                # (el orquestador a veces guarda "Stage 2 diario / Stage 4 semanal")
-                if len(s) > 14:
-                    # Si contiene '/', quedarse con la primera parte
-                    if "/" in s:
-                        s = s.split("/")[0].strip()
-                    # Si contiene '(', quedarse antes del paréntesis
-                    if "(" in s:
-                        s = s.split("(")[0].strip()
-                    # Hard-cap 14 chars
-                    if len(s) > 14:
-                        s = s[:13].rstrip(",;: ") + "…"
+                # Quedarse con la primera parte si trae '/' o '(' (valores compuestos)
+                if "/" in s and len(s) > 14:
+                    s = s.split("/")[0].strip()
+                if "(" in s:
+                    s = s.split("(")[0].strip()
+                # Traducir el valor a español simple (wide→amplia, risk-on→…)
+                s = _es_value(s)
+                # Hard-cap de longitud para que quepa en la card
+                if len(s) > 16:
+                    s = s[:15].rstrip(",;: ") + "…"
                 return s
         return "—"
 
@@ -1425,29 +1649,29 @@ def _page_3_pillars(c, a):
     # (title, símbolo, report_key, key_metric_label, key_metric_value_lookup)
     cards = [
         ("FUNDAMENTALES",   "◉", "fundamentals",
-         "P/E FWD", km(reports.get("fundamentals"), "forward_pe", "pe_forward", "pe_ratio"),
-         "ROIC",    km(reports.get("fundamentals"), "roic", "roic_pct", "roe")),
+         "VALORACIÓN", km(reports.get("fundamentals"), "forward_pe", "pe_forward", "pe_ratio"),
+         "RENT. CAPITAL", km(reports.get("fundamentals"), "roic", "roic_pct", "roe")),
         ("TÉCNICO",         "▲", "technical",
-         "STAGE",   km(reports.get("technical"), "stage", "stage_minervini", "minervini_stage"),
-         "RSI 14",  km(reports.get("technical"), "rsi", "rsi_14")),
-        ("VIAB. FUTURA",    "◇", "future",
-         "MOAT",    km(reports.get("future"), "moat_strength", "moat", "moat_quality"),
+         "FASE",    km(reports.get("technical"), "stage", "stage_minervini", "minervini_stage"),
+         "FUERZA",  km(reports.get("technical"), "rsi", "rsi_14")),
+        ("FUTURO",          "◇", "future",
+         "VENTAJA", km(reports.get("future"), "moat_strength", "moat", "moat_quality"),
          "DISRUPCIÓN", km(reports.get("future"), "disruption_risk", "disruption")),
-        ("SMART MONEY",     "⬢", "institutional",
-         "INSTITUCIONAL", km(reports.get("institutional"), "institutional_ownership", "inst_ownership_pct", "ownership"),
-         "INSIDERS", km(reports.get("institutional"), "insider_signal", "insider_buying", "insider_activity")),
+        ("INSTITUCIONAL",   "⬢", "institutional",
+         "PROPIEDAD", km(reports.get("institutional"), "institutional_ownership", "inst_ownership_pct", "ownership"),
+         "DIRECTIVOS", km(reports.get("institutional"), "insider_buying_signal", "insider_signal", "smart_money_signal")),
         ("CATALIZADORES",   "✦", "catalysts",
-         "PRÓX. EARN.", km(reports.get("catalysts"), "next_earnings_days", "days_to_earnings", "next_earnings"),
-         "BEAT RATE", km(reports.get("catalysts"), "beat_rate", "earnings_beat_rate")),
-        ("MACRO & SECTOR",  "⊕", "macro",
+         "PRÓX. RESULT.", km(reports.get("catalysts"), "next_earnings", "next_earnings_days", "days_to_earnings"),
+         "ACIERTOS", km(reports.get("catalysts"), "beat_rate", "earnings_beat_rate")),
+        ("MACRO Y SECTOR",  "⊕", "macro",
          "ENTORNO", km(reports.get("macro"), "market_environment", "market_env", "regime"),
          "SECTOR",  km(reports.get("macro"), "sector_momentum", "sector_perf", "sector")),
         ("SENTIMIENTO",     "◐", "sentiment",
          "NARRATIVA", km(reports.get("sentiment"), "narrative", "dominant_theme", "narrative_theme"),
-         "MOMENTUM", km(reports.get("sentiment"), "sentiment_momentum", "sentiment_trend", "momentum")),
-        ("RIESGO & SIZING", "◈", "risk",
-         "R/R", _extract_ratio(a.risk_reward),
-         "SIZING", (lambda f: f"{f:.1f}%" if f is not None else "—")(_to_float(a.position_size_pct))),
+         "TENDENCIA", km(reports.get("sentiment"), "sentiment_momentum", "sentiment_trend", "momentum")),
+        ("RIESGO",          "◈", "risk",
+         "GANA/PIERDE", _extract_ratio(a.risk_reward),
+         "TAMAÑO", (lambda f: f"{f:.1f}%" if f is not None else "—")(_to_float(a.position_size_pct))),
     ]
 
     for i, (title, sym, rkey, m1_lbl, m1_val, m2_lbl, m2_val) in enumerate(cards):
@@ -1496,31 +1720,27 @@ def _page_3_pillars(c, a):
         c.setLineWidth(0.3)
         c.line(cx + 20, _y(ctop + 136), cx + card_w - 20, _y(ctop + 136))
 
-        # ── INSIGHT NARRATIVO (más grande con espacio extra) ──
-        insight = _extract_insight(rpt, max_chars=260)
+        # ── CONCLUSIÓN SIMPLE (en español, generada por código) ──
+        insight = _conclusion(rkey, score)
         if insight:
             _text(c, "“", cx + 22, ctop + 176,
                   font=FONT_DISPLAY_XL, size=38, color=ORANGE)
             _wrap(c, insight, cx + 54, ctop + 168,
                   width=card_w - 76, font=FONT_REG, size=18,
                   color=TEXT_MD, line_height=1.4, max_lines=4)
-        else:
-            _text(c, "Insight no disponible para este análisis.",
-                  cx + card_w/2, ctop + 200,
-                  font=FONT_REG, size=16, color=TEXT_DIM, anchor="center")
 
-        # ── PRO destacado al pie ──
-        pro = first_pro(rpt)
+        # ── ETIQUETA DE RESULTADO al pie ──
+        pro = _score_tag(score)
         if pro:
             pro_y = ctop + card_h - 26
-            c.setFillColor(GREEN)
+            c.setFillColor(sc_color)
             c.circle(cx + 26, _y(pro_y - 5), 5, fill=1, stroke=0)
             _wrap(c, pro, cx + 42, pro_y,
                   width=card_w - 62, font=FONT_REG, size=14,
                   color=TEXT_LO, line_height=1.3, max_lines=1)
 
     # Footer disclaimer
-    _text(c, "Análisis educativo · Vocabulario de inversión, no trading · No constituye recomendación",
+    _text(c, "Análisis educativo · Lenguaje de inversión a largo plazo · No constituye recomendación",
           PAGE_W/2, PAGE_H - 22,
           font=FONT_REG, size=9, color=TEXT_DIM, anchor="center")
 
@@ -1641,10 +1861,10 @@ def _page_4_finale(c, a):
     col_w = (PAGE_W - 2 * MARGIN_X - col_gap) / 2
 
     # ════════ COLUMNA IZQUIERDA — FORTALEZAS + DEBILIDADES ═══════════════
-    # Aplicamos el glosario plain-language SIN llamar a la API
+    # Conclusiones simples en español generadas por código (no narran datos
+    # ni dejan términos en inglés). Derivadas de los puntajes de cada dimensión.
     left_x = MARGIN_X
-    strengths = [_simplify_lang(s) for s in (a.key_strengths or [])[:4]]
-    weaknesses = [_simplify_lang(w) for w in (a.key_risks or [])[:4]]
+    strengths, weaknesses = _auto_strengths_weaknesses(a)
 
     # Sección FORTALEZAS
     _text(c, "FORTALEZAS", left_x, top_y + 14,
