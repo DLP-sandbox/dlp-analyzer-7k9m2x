@@ -2,7 +2,7 @@ name: Keep Streamlit App Warm
 
 on:
   schedule:
-    - cron: '*/10 * * * *'
+    - cron: '*/5 * * * *'
   workflow_dispatch:
 
 jobs:
