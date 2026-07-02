@@ -233,7 +233,8 @@ def load_all_analyses() -> dict:
 
 def stock_analysis_from_dict(d: dict):
     """Reconstruye un StockAnalysis (con sus AgentReports) desde dict."""
-    from agents.base import AgentReport
+    from agents.base import AgentReport, sanitize_leaked_json_text
+
     from agents.orchestrator import StockAnalysis
 
     reports = {}
@@ -244,7 +245,9 @@ def stock_analysis_from_dict(d: dict):
             reports[k] = AgentReport(
                 agent_name=v.get("agent_name", k),
                 score=float(v.get("score", 50)),
-                analysis=v.get("analysis", ""),
+                # Limpia sobre la marcha análisis viejos que quedaron guardados
+                # con el JSON crudo filtrado (no muta la base de datos).
+                analysis=sanitize_leaked_json_text(v.get("analysis", "")),
                 pros=list(v.get("pros") or []),
                 cons=list(v.get("cons") or []),
                 key_metrics=dict(v.get("key_metrics") or {}),

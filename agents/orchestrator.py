@@ -452,20 +452,11 @@ class Orchestrator:
         return "\n".join(lines)
 
     def _parse_json(self, text: str) -> dict:
-        import re
-        match = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except Exception:
-                pass
-        match = re.search(r"\{[\s\S]+\}", text)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except Exception:
-                pass
-        return {}
+        # Parseo robusto compartido: tolera saltos de línea literales dentro de
+        # los strings (ej: la tesis en 2 párrafos) y repara JSON truncado.
+        from agents.base import extract_json_dict
+        obj = extract_json_dict(text)
+        return obj if obj is not None else {}
 
     def _score_to_recommendation(self, score: float) -> str:
         if score >= THRESHOLDS["MUY ATRACTIVO"]:

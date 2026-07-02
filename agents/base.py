@@ -199,6 +199,166 @@ class AgentReport:
         }
 
 
+# ── Parseo robusto de JSON de las respuestas de Claude ──────────────────
+# Los modelos (sobre todo Haiku) suelen escribir los campos narrativos con
+# SALTOS DE LÍNEA LITERALES dentro del string (ej: "analysis" en 1-2 párrafos).
+# json.loads en modo estricto rechaza esos caracteres de control ("Invalid
+# control character"), lo que hacía fallar el parseo y volcar el JSON crudo en
+# pantalla. Estas utilidades toleran esos casos y reparan JSON truncado, sin
+# cambiar el comportamiento para respuestas ya válidas.
+
+def _close_truncated_json(s: str) -> str:
+    """Cierra strings/objetos/arrays que quedaron abiertos por truncado."""
+    in_str = False
+    esc = False
+    stack = []
+    for ch in s:
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch in "{[":
+            stack.append(ch)
+        elif ch == "}" and stack and stack[-1] == "{":
+            stack.pop()
+        elif ch == "]" and stack and stack[-1] == "[":
+            stack.pop()
+    out = s
+    if in_str:
+        out += '"'
+    out = re.sub(r",\s*$", "", out.rstrip())
+    for ch in reversed(stack):
+        out += "}" if ch == "{" else "]"
+    return out
+
+
+def _lenient_json_loads(s: str):
+    """json.loads tolerante: permite saltos de línea literales (strict=False),
+    quita comas colgantes y repara truncados. Devuelve dict o None."""
+    s = s.strip()
+    no_trailing = re.sub(r",(\s*[}\]])", r"\1", s)
+    for cand in (s, no_trailing, _close_truncated_json(s), _close_truncated_json(no_trailing)):
+        try:
+            obj = json.loads(cand, strict=False)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            return obj
+    return None
+
+
+def _first_balanced_object(text: str):
+    """Devuelve el primer objeto JSON balanceado (respeta strings). Si quedó
+    truncado, devuelve desde la primera '{' hasta el final para repararlo luego."""
+    start = text.find("{")
+    if start == -1:
+        return None
+    in_str = False
+    esc = False
+    depth = 0
+    for i in range(start, len(text)):
+        ch = text[i]
+        if esc:
+            esc = False
+            continue
+        if ch == "\\":
+            esc = True
+            continue
+        if ch == '"':
+            in_str = not in_str
+            continue
+        if in_str:
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return text[start:]
+
+
+def extract_json_dict(text: str):
+    """Extrae de forma robusta el primer objeto JSON de `text`. dict o None."""
+    candidates = []
+    m = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
+    if m:
+        candidates.append(m.group(1))
+    balanced = _first_balanced_object(text)
+    if balanced:
+        candidates.append(balanced)
+    m = re.search(r"\{[\s\S]+\}", text)
+    if m:
+        candidates.append(m.group(0))
+    for cand in candidates:
+        obj = _lenient_json_loads(cand)
+        if obj is not None:
+            return obj
+    return None
+
+
+def salvage_analysis_text(text: str) -> str:
+    """Rescata SÓLO el texto del campo 'analysis' de un JSON irrecuperable.
+    Nunca devuelve el JSON crudo: si no hay nada rescatable, un mensaje limpio."""
+    m = re.search(r'"analysis"\s*:\s*"((?:[^"\\]|\\.)*)"', text, re.DOTALL)
+    if m:
+        try:
+            val = json.loads('"' + m.group(1) + '"', strict=False).strip()
+            if len(val) >= 20:
+                return val
+        except Exception:
+            pass
+    # Truncado: desde "analysis": " hasta el próximo campo o el final del texto
+    m = re.search(r'"analysis"\s*:\s*"(.+?)(?="\s*,\s*"\w+"\s*:|"\s*\}|$)', text, re.DOTALL)
+    if m:
+        val = re.sub(r"\\[nrt]", " ", m.group(1))
+        val = val.replace('\\"', '"').replace("\\", "").strip().strip('"').strip()
+        if len(val) >= 20:
+            return val
+    return ("No pudimos generar la conclusión de este análisis en este intento. "
+            "Vuelve a ejecutarlo en un momento; a veces la fuente de datos o el "
+            "modelo tardan en responder.")
+
+
+def _looks_like_leaked_json(text: str) -> bool:
+    """True SÓLO si el texto es claramente un volcado de JSON crudo (no prosa).
+
+    Conservador a propósito: una conclusión normal en español nunca empieza con
+    '{' o '```', ni contiene la clave literal `"analysis":`. Así es imposible
+    tocar por error un análisis bien formado."""
+    if not text:
+        return False
+    stripped = text.lstrip()
+    if stripped.startswith("{") or stripped.startswith("```"):
+        return True
+    # Clave JSON literal de un reporte serializado (el key va en inglés; la
+    # prosa en español usaría «análisis» con tilde, nunca `"analysis":`).
+    return re.search(r'"(analysis|score|conviction)"\s*:', text) is not None
+
+
+def sanitize_leaked_json_text(text: str) -> str:
+    """Si `text` es un JSON crudo filtrado (bug de análisis viejos guardados),
+    devuelve SÓLO la conclusión limpia. Si es prosa normal, lo deja intacto.
+
+    No muta datos: se aplica al cargar/mostrar, extrayendo el texto real sobre
+    la marcha. Para texto ya limpio es un no-op."""
+    if not isinstance(text, str) or not _looks_like_leaked_json(text):
+        return text
+    obj = extract_json_dict(text)
+    if obj is not None:
+        val = obj.get("analysis")
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return salvage_analysis_text(text)
+
+
 class BaseAgent:
     name: str = "BaseAgent"
     model: str = SUBAGENT_MODEL
@@ -234,24 +394,22 @@ class BaseAgent:
             return {"error": str(e), "score": 50, "analysis": f"Error en análisis: {e}", "pros": [], "cons": []}
 
     def _parse_json(self, text: str) -> dict:
-        """Extrae el primer bloque JSON de la respuesta."""
-        # Intenta bloque ```json ... ```
-        match = re.search(r"```(?:json)?\s*([\s\S]+?)```", text)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except json.JSONDecodeError:
-                pass
+        """Extrae el primer bloque JSON de la respuesta de forma robusta.
+        Tolera saltos de línea literales dentro de los strings y repara JSON
+        truncado. Si aun así no se puede parsear, rescata SÓLO el texto del
+        campo `analysis` — NUNCA vuelca el JSON crudo en pantalla."""
+        obj = extract_json_dict(text)
+        if obj is not None:
+            return obj
 
-        # Intenta JSON inline (primer { ... })
-        match = re.search(r"\{[\s\S]+\}", text)
-        if match:
-            try:
-                return json.loads(match.group(0))
-            except json.JSONDecodeError:
-                pass
-
-        return {"error": "No se pudo parsear JSON", "raw": text, "score": 50, "analysis": text, "pros": [], "cons": []}
+        return {
+            "error": "No se pudo parsear JSON",
+            "raw": text,
+            "score": 50,
+            "analysis": salvage_analysis_text(text),
+            "pros": [],
+            "cons": [],
+        }
 
     def _format_number(self, value, decimals: int = 2, suffix: str = "") -> str:
         if value is None:

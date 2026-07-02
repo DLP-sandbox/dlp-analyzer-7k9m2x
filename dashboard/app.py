@@ -23,6 +23,7 @@ import streamlit.components.v1 as components
 
 # Tomar la key DIRECTAMENTE de la variable de entorno ya cargada
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
+from agents.base import sanitize_leaked_json_text
 from agents.orchestrator import Orchestrator, StockAnalysis
 from agents.screener import ScreenerAgent, ScreenerResult
 from dashboard.styles import (
@@ -890,9 +891,14 @@ def _render_pros_cons(report, pros_title="💪 Top 3 Señales Positivas", cons_t
 def _render_analysis_card(report, title="Análisis Detallado"):
     if not report.analysis:
         return
+    # Red de seguridad final: si por cualquier vía llegara un JSON crudo filtrado,
+    # se limpia aquí antes de mostrarlo. Para texto ya limpio es un no-op.
+    analysis_text = sanitize_leaked_json_text(report.analysis)
+    if not analysis_text:
+        return
     st.markdown(f'<div class="section-title-bar">📝 {title}</div>', unsafe_allow_html=True)
     st.markdown(
-        f'<div class="analysis-card"><div class="analysis-text">{report.analysis}</div></div>',
+        f'<div class="analysis-card"><div class="analysis-text">{analysis_text}</div></div>',
         unsafe_allow_html=True,
     )
 
