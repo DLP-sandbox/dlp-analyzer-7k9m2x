@@ -8,27 +8,39 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 # ── Paleta Bloomberg ──────────────────────────────────────────────────────
-BG_MAIN  = "#0B0E11"
+# BG unificado con la card CSS (#0F1419) para que figura + contenedor se
+# fundan en una sola pieza visual (el CSS de la app pone borde/radius/sombra).
+BG_MAIN  = "#0F1419"
 BG_CARD  = "#0F1419"
-GRID     = "#1A2030"
-TEXT     = "#E0E0E0"
+GRID     = "rgba(122,136,152,0.10)"   # gridlines hair-line, no compiten con datos
+ZEROLINE = "rgba(122,136,152,0.18)"
+TEXT     = "#E4E7EC"
 MUTED    = "#7A8898"
 GREEN    = "#00FF88"
 RED      = "#FF3B5C"
 ORANGE   = "#FFA500"
+GOLD     = "#FFB84D"
 BLUE     = "#4A9EFF"
 PURPLE   = "#9B59FF"
 YELLOW   = "#FFD740"
 WHITE    = "#FFFFFF"
 
+# Tooltip unificado premium: card oscura, borde oro, tipografía mono.
+HOVERLABEL = dict(
+    bgcolor="#131922",
+    bordercolor="rgba(255,184,77,0.35)",
+    font=dict(family="JetBrains Mono, monospace", size=11, color=TEXT),
+)
+
 PLOTLY_LAYOUT = dict(
     paper_bgcolor=BG_MAIN,
     plot_bgcolor=BG_CARD,
     font=dict(color=TEXT, family="JetBrains Mono, monospace", size=11),
-    xaxis=dict(gridcolor=GRID, zerolinecolor=GRID, showgrid=True),
-    yaxis=dict(gridcolor=GRID, zerolinecolor=GRID, showgrid=True),
+    xaxis=dict(gridcolor=GRID, zerolinecolor=ZEROLINE, showgrid=True),
+    yaxis=dict(gridcolor=GRID, zerolinecolor=ZEROLINE, showgrid=True),
     margin=dict(l=10, r=10, t=40, b=10),
     hovermode="x unified",
+    hoverlabel=HOVERLABEL,
 )
 
 
@@ -75,16 +87,27 @@ def build_price_chart(df_daily: pd.DataFrame, indicators: dict, ticker: str) -> 
         macd_line = macd_signal = macd_hist = None
 
     # 4 subplots: Precio | Volumen | RSI | MACD
-    # NOTA: el título del subplot 1 ("NVDA — Precio") va vacío para evitar
-    # que se solape con la leyenda horizontal (que también va arriba del
-    # subplot 1). El título se agrega abajo como annotation custom.
+    # NOTA: los títulos de subplot van vacíos — los de Plotly se renderizan
+    # centrados ENCIMA de los datos y chocan con ellos. Se agregan abajo como
+    # annotations propias: etiqueta pequeña, mono, mayúscula, arriba-izquierda
+    # de cada panel (estilo terminal), que nunca pisa las series.
     fig = make_subplots(
         rows=4, cols=1,
         shared_xaxes=True,
-        vertical_spacing=0.02,
+        vertical_spacing=0.035,
         row_heights=[0.55, 0.15, 0.15, 0.15],
-        subplot_titles=["", "Volumen", "RSI 14", "MACD"],
+        subplot_titles=["", "", "", ""],
     )
+
+    # Etiquetas de panel (VOLUMEN / RSI 14 / MACD) fuera del área de datos
+    for row_axis, label in [("y2", "VOLUMEN"), ("y3", "RSI 14"), ("y4", "MACD")]:
+        fig.add_annotation(
+            text=label,
+            xref="paper", yref=f"{row_axis} domain",
+            x=0.004, y=1.06, xanchor="left", yanchor="bottom",
+            showarrow=False,
+            font=dict(size=9.5, color=MUTED, family="JetBrains Mono, monospace"),
+        )
 
     # ── Candlesticks ──────────────────────────────────────────────────────
     fig.add_trace(go.Candlestick(
@@ -114,18 +137,28 @@ def build_price_chart(df_daily: pd.DataFrame, indicators: dict, ticker: str) -> 
         ), row=1, col=1)
 
     # ── 52W High/Low annotations ──────────────────────────────────────────
+    # Líneas hair-line punteadas y etiquetas con pill de fondo para que se
+    # lean sin chocar con las velas (antes: dash grueso naranja muy ruidoso).
     high_52w = indicators.get("52w_high")
     low_52w  = indicators.get("52w_low")
     if high_52w:
-        fig.add_hline(y=high_52w, line_dash="dash", line_color=ORANGE,
+        fig.add_hline(y=high_52w, line_dash="dot", line_width=1,
+                      line_color="rgba(255,165,0,0.55)",
                       annotation_text=f"52W High ${high_52w:.2f}",
-                      annotation_font_color=ORANGE,
-                      annotation_position="bottom right", row=1, col=1)
+                      annotation_font=dict(color=ORANGE, size=10,
+                                           family="JetBrains Mono, monospace"),
+                      annotation_position="bottom right",
+                      annotation_bgcolor="rgba(15,20,25,0.88)",
+                      annotation_borderpad=3, row=1, col=1)
     if low_52w:
-        fig.add_hline(y=low_52w, line_dash="dash", line_color=MUTED,
+        fig.add_hline(y=low_52w, line_dash="dot", line_width=1,
+                      line_color="rgba(122,136,152,0.45)",
                       annotation_text=f"52W Low ${low_52w:.2f}",
-                      annotation_font_color=MUTED,
-                      annotation_position="top right", row=1, col=1)
+                      annotation_font=dict(color=MUTED, size=10,
+                                           family="JetBrains Mono, monospace"),
+                      annotation_position="top right",
+                      annotation_bgcolor="rgba(15,20,25,0.88)",
+                      annotation_borderpad=3, row=1, col=1)
 
     # ── Volumen con color según vela ──────────────────────────────────────
     vol_colors = [GREEN if c >= o else RED for c, o in zip(close, open_)]
@@ -139,7 +172,8 @@ def build_price_chart(df_daily: pd.DataFrame, indicators: dict, ticker: str) -> 
     avg_vol = vol.rolling(20).mean()
     fig.add_trace(go.Scatter(
         x=dates, y=avg_vol, mode="lines", name="Vol MA20",
-        line=dict(color=YELLOW, width=1.5, dash="dot"),
+        line=dict(color=GOLD, width=1, dash="dot"),
+        opacity=0.8,
         showlegend=False,
     ), row=2, col=1)
 
@@ -181,15 +215,13 @@ def build_price_chart(df_daily: pd.DataFrame, indicators: dict, ticker: str) -> 
     # alineado a la izquierda del subplot 1 para que NUNCA se solape con
     # la leyenda horizontal que vive arriba del subplot.
     fig.add_annotation(
-        text=f"<b>{ticker} — Precio</b>",
+        text=f"<b>{ticker}</b><span style='color:{MUTED}'>  ·  PRECIO</span>",
         xref="x domain", yref="y domain",
-        x=0.01, y=0.97,
+        x=0.01, y=0.98,
         xanchor="left", yanchor="top",
         showarrow=False,
-        font=dict(size=12, color=TEXT, family="JetBrains Mono, monospace"),
-        bgcolor="rgba(11,14,17,0.7)",
-        bordercolor="rgba(255,184,77,0.20)",
-        borderwidth=1,
+        font=dict(size=13, color=WHITE, family="JetBrains Mono, monospace"),
+        bgcolor="rgba(15,20,25,0.75)",
         borderpad=4,
         row=1, col=1,
     )
@@ -201,29 +233,36 @@ def build_price_chart(df_daily: pd.DataFrame, indicators: dict, ticker: str) -> 
         font=dict(color=TEXT, family="JetBrains Mono, monospace", size=11),
         height=700,
         hovermode="x unified",
+        hoverlabel=HOVERLABEL,
         xaxis_rangeslider_visible=False,
         legend=dict(
             orientation="h",
-            yanchor="bottom", y=1.02,
-            xanchor="center", x=0.5,
-            font=dict(size=10, color=TEXT),
-            bgcolor="rgba(11,14,17,0.6)",
-            bordercolor="rgba(255,184,77,0.15)",
-            borderwidth=1,
+            yanchor="bottom", y=1.015,
+            xanchor="right", x=1,
+            font=dict(size=10, color=MUTED,
+                      family="JetBrains Mono, monospace"),
+            bgcolor="rgba(0,0,0,0)",
+            borderwidth=0,
+            itemwidth=30,
         ),
-        margin=dict(l=10, r=10, t=55, b=10),
+        margin=dict(l=10, r=10, t=48, b=10),
     )
 
-    # Colores de ejes
+    # Ejes: gridlines hair-line, ticks mono pequeños, sin líneas de borde.
+    # automargin=True en Y: reserva espacio para los tick labels (sin esto,
+    # con margin l=10 los números del eje quedan recortados).
     for i in range(1, 5):
         fig.update_xaxes(
-            gridcolor=GRID, zerolinecolor=GRID,
-            tickfont=dict(color=MUTED, size=9),
+            gridcolor=GRID, zerolinecolor=ZEROLINE, showline=False,
+            tickfont=dict(color=MUTED, size=9.5,
+                          family="JetBrains Mono, monospace"),
             row=i, col=1,
         )
         fig.update_yaxes(
-            gridcolor=GRID, zerolinecolor=GRID,
-            tickfont=dict(color=MUTED, size=9),
+            gridcolor=GRID, zerolinecolor=ZEROLINE, showline=False,
+            automargin=True,
+            tickfont=dict(color=MUTED, size=9.5,
+                          family="JetBrains Mono, monospace"),
             row=i, col=1,
         )
 
@@ -237,7 +276,14 @@ def build_gauge(score: float, recommendation: str) -> go.Figure:
     garantizar que NUNCA se solape (issue conocido de Plotly gauge+number
     en figuras pequeñas)."""
 
+    # BUG FIX: las claves estaban solo en inglés pero la app emite las
+    # recomendaciones en español (THRESHOLDS de settings.py), así que TODO
+    # gauge caía al naranja por defecto. Mapa completo ES + EN.
     rec_colors = {
+        "MUY ATRACTIVO":  "#00FF88",
+        "ATRACTIVO":      "#00FF88",
+        "EN OBSERVACIÓN": "#FFB84D",
+        "EVITAR":         "#FF3B5C",
         "STRONG BUY": "#00FF88",
         "BUY":        "#4A9EFF",
         "WATCH":      "#FFA500",
@@ -253,25 +299,26 @@ def build_gauge(score: float, recommendation: str) -> go.Figure:
         domain={"x": [0, 1], "y": [0.32, 1.0]},
         title={
             "text": f"<b>DLP SCORE</b><br><span style='font-size:0.7em;color:{color}'>{recommendation}</span>",
-            "font": {"size": 14, "color": TEXT},
+            "font": {"size": 14, "color": TEXT,
+                     "family": "JetBrains Mono, monospace"},
         },
         gauge={
             "axis": {
                 "range": [0, 100],
                 "tickwidth": 1,
                 "tickcolor": MUTED,
-                "tickfont": {"color": MUTED, "size": 9},
+                "tickfont": {"color": MUTED, "size": 9,
+                             "family": "JetBrains Mono, monospace"},
                 "dtick": 20,
             },
             "bar": {"color": color, "thickness": 0.3},
             "bgcolor": BG_CARD,
-            "borderwidth": 1,
-            "bordercolor": GRID,
+            "borderwidth": 0,
             "steps": [
-                {"range": [0, 50],  "color": "#1A0A0A"},
-                {"range": [50, 65], "color": "#1A1200"},
-                {"range": [65, 80], "color": "#0A1A10"},
-                {"range": [80, 100],"color": "#0A1A0A"},
+                {"range": [0, 50],  "color": "rgba(255,59,92,0.10)"},
+                {"range": [50, 65], "color": "rgba(255,184,77,0.10)"},
+                {"range": [65, 80], "color": "rgba(0,255,136,0.08)"},
+                {"range": [80, 100],"color": "rgba(0,255,136,0.16)"},
             ],
             "threshold": {
                 "line": {"color": WHITE, "width": 2},
@@ -288,7 +335,7 @@ def build_gauge(score: float, recommendation: str) -> go.Figure:
         xref="paper", yref="paper",
         text=f"<b>{score:.0f}</b><span style='font-size:0.45em;color:{MUTED}'>/100</span>",
         showarrow=False,
-        font=dict(size=44, color=color, family="JetBrains Mono"),
+        font=dict(size=44, color=color, family="JetBrains Mono, monospace"),
         align="center",
     )
 
@@ -898,7 +945,7 @@ def build_quick_chart(df: pd.DataFrame, ticker: str, period_days: int = 126) -> 
     fig.add_trace(go.Scatter(
         x=dates, y=ma50,
         mode="lines",
-        line=dict(color=YELLOW, width=1.2, dash="dot"),
+        line=dict(color=GOLD, width=1.2, dash="dot"),
         name="MA 50",
         showlegend=False,
         hovertemplate="MA50 $%{y:.2f}<extra></extra>",
@@ -924,13 +971,23 @@ def build_quick_chart(df: pd.DataFrame, ticker: str, period_days: int = 126) -> 
         hovertemplate="Vol %{y:,.0f}<extra></extra>",
     ), row=2, col=1)
 
+    # Punto vivo sobre el último precio — ancla la mirada al dato más reciente
+    fig.add_trace(go.Scatter(
+        x=[dates[-1]], y=[float(close.iloc[-1])],
+        mode="markers",
+        marker=dict(color=line_color, size=7,
+                    line=dict(color="rgba(255,255,255,0.9)", width=1.5)),
+        showlegend=False, hoverinfo="skip",
+    ), row=1, col=1)
+
     fig.update_layout(
         paper_bgcolor=BG_MAIN,
         plot_bgcolor=BG_CARD,
         font=dict(color=TEXT, family="JetBrains Mono, monospace", size=10),
         height=360,
-        margin=dict(l=8, r=8, t=8, b=8),
+        margin=dict(l=8, r=14, t=8, b=8),
         hovermode="x unified",
+        hoverlabel=HOVERLABEL,
         showlegend=False,
     )
 

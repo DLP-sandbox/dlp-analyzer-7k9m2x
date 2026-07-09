@@ -3108,6 +3108,128 @@ section[data-testid="stSidebar"] {
     background: rgba(255,184,77,0.50);
 }
 
+/* ══ 18. PREMIUM POLISH PACK ═══════════════════════════════════════════
+   Apéndice ADITIVO: no modifica ninguna regla anterior, solo eleva la
+   calidad percibida. Charts como cards selladas, tabs con subrayado de
+   gradiente, spinner dorado, focus accesible y micro-detalles.
+   ═══════════════════════════════════════════════════════════════════ */
+
+/* Charts Plotly como cards premium. El paper de las figuras es #0F1419
+   (charts.py) — idéntico a este fondo, así figura y card se funden en
+   una sola pieza con borde hair-line, radio y sombra. */
+[data-testid="stPlotlyChart"] {
+    background: #0F1419;
+    border: 1px solid rgba(255,184,77,0.12);
+    border-radius: 12px;
+    padding: 10px 10px 4px 10px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.25);
+    overflow: hidden;
+    transition: border-color 280ms cubic-bezier(0.16,1,0.3,1),
+                box-shadow 280ms cubic-bezier(0.16,1,0.3,1);
+}
+[data-testid="stPlotlyChart"]:hover {
+    border-color: rgba(255,184,77,0.28);
+    box-shadow: 0 6px 24px rgba(0,0,0,0.35), 0 0 0 1px rgba(255,184,77,0.06);
+}
+
+/* Tabs: subrayado con gradiente oro + glow en la activa; el contenido
+   de cada panel entra con un fade sutil al cambiar de pestaña. */
+button[data-baseweb="tab"] {
+    position: relative;
+    overflow: visible;
+}
+button[data-baseweb="tab"][aria-selected="true"] {
+    text-shadow: 0 0 14px rgba(255,184,77,0.35);
+    /* apaga el subrayado sólido viejo — lo reemplaza el gradiente ::after */
+    border-bottom-color: transparent !important;
+}
+button[data-baseweb="tab"][aria-selected="true"]::after {
+    content: '';
+    position: absolute;
+    left: 8px; right: 8px; bottom: -1px;
+    height: 2px;
+    background: linear-gradient(90deg, transparent, #FFB84D 18%, #FFD740 50%, #FFB84D 82%, transparent);
+    border-radius: 2px;
+    box-shadow: 0 0 10px rgba(255,184,77,0.45);
+    animation: anim-fadeIn 300ms cubic-bezier(0.16,1,0.3,1);
+    pointer-events: none;
+}
+div[data-baseweb="tab-panel"] {
+    animation: anim-fadeIn 350ms cubic-bezier(0.16,1,0.3,1);
+}
+
+/* Spinner y estados de carga en oro de marca */
+[data-testid="stSpinner"] i,
+[data-testid="stSpinner"] svg,
+[data-testid="stSpinner"] > div > i {
+    color: #FFB84D !important;
+    fill: #FFB84D !important;
+    border-top-color: #FFB84D !important;
+}
+
+/* Selectbox / multiselect coherentes con los inputs de terminal */
+[data-baseweb="select"] > div {
+    background: #0F1419 !important;
+    border-color: #1E2530 !important;
+    font-family: 'JetBrains Mono', monospace !important;
+    border-radius: 6px !important;
+    transition: border-color 200ms ease !important;
+}
+[data-baseweb="select"] > div:hover {
+    border-color: rgba(255,184,77,0.35) !important;
+}
+[data-baseweb="popover"] [data-baseweb="menu"] {
+    background: #131922 !important;
+    border: 1px solid rgba(255,184,77,0.18) !important;
+    border-radius: 8px !important;
+}
+
+/* Tablas / dataframes: contenedor sellado y header estilo terminal */
+[data-testid="stDataFrame"] {
+    border: 1px solid rgba(255,184,77,0.12);
+    border-radius: 10px;
+    overflow: hidden;
+}
+
+/* st.metric nativos (por si se usan): mismo lenguaje que los kpi-tiles */
+[data-testid="stMetric"] {
+    background: linear-gradient(135deg, #0F1419 0%, #131922 100%);
+    border: 1px solid rgba(255,184,77,0.12);
+    border-radius: 10px;
+    padding: 12px 14px;
+}
+[data-testid="stMetricLabel"] {
+    font-family: 'JetBrains Mono', monospace !important;
+    text-transform: uppercase;
+    letter-spacing: 0.14em;
+    color: #7A8898 !important;
+}
+
+/* Micro-detalles de calidad percibida */
+::selection { background: rgba(255,184,77,0.28); color: #FFFFFF; }
+:focus-visible {
+    outline: 2px solid rgba(255,184,77,0.5) !important;
+    outline-offset: 2px !important;
+}
+[data-testid="stExpander"] summary:hover {
+    color: #FFB84D !important;
+    transition: color 200ms ease;
+}
+
+/* Re-cierre de accesibilidad: las reglas de este apéndice tienen mayor
+   especificidad que el bloque reduce-motion global anterior, así que se
+   re-declara aquí para que también las cubra. */
+@media (prefers-reduced-motion: reduce) {
+    [data-testid="stPlotlyChart"],
+    button[data-baseweb="tab"][aria-selected="true"]::after,
+    div[data-baseweb="tab-panel"],
+    [data-baseweb="select"] > div,
+    [data-testid="stExpander"] summary:hover {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.01ms !important;
+    }
+}
+
 </style>
 """
 

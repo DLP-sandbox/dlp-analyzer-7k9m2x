@@ -46,7 +46,84 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# Preconnect a Google Fonts ANTES del CSS: abre la conexión TLS en paralelo
+# mientras el navegador parsea el @import, acelerando el primer pintado de
+# las fuentes (Inter/JetBrains Mono) en cientos de ms en conexiones frías.
+st.markdown(
+    '<link rel="preconnect" href="https://fonts.googleapis.com">'
+    '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>',
+    unsafe_allow_html=True,
+)
+
 st.markdown(BLOOMBERG_CSS, unsafe_allow_html=True)
+
+
+# ── Capa de datos/figuras cacheada en RAM ──────────────────────────────────
+# El caché de disco de data/market_data evita ir a la RED, pero cada rerun de
+# Streamlit (cada click, tab o cambio de período) re-parseaba el JSON, re-
+# construía DataFrames y re-armaba las figuras Plotly desde cero (~350ms de
+# ruta caliente). st.cache_data memoiza en RAM con TTL alineado al caché de
+# disco: los reruns repetidos cuestan ~0ms sin cambiar la frescura de datos.
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _hist_and_indicators(ticker: str, period: str = "2y"):
+    from data.market_data import get_price_history, compute_technical_indicators
+    df = get_price_history(ticker, period=period)
+    ind = compute_technical_indicators(df) if df is not None and not df.empty else {}
+    return df, ind
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_price_history(ticker: str, period: str = "1y"):
+    from data.market_data import get_price_history
+    return get_price_history(ticker, period=period)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_company_info(ticker: str) -> dict:
+    from data.market_data import get_company_info
+    return get_company_info(ticker)
+
+
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_news(ticker: str, max_items: int = 6):
+    from data.market_data import get_news
+    return get_news(ticker, max_items=max_items)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_price_fig(ticker: str, period: str = "2y"):
+    df, ind = _hist_and_indicators(ticker, period)
+    return build_price_chart(df, ind, ticker)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _cached_quick_fig(ticker: str, period: str = "1y"):
+    from dashboard.charts import build_quick_chart
+    df = _cached_price_history(ticker, period)
+    return build_quick_chart(df, ticker)
+
+
+# Figuras deterministas del overview: mismos args → misma figura. Sin TTL,
+# porque solo dependen del análisis guardado (no de datos de mercado vivos).
+@st.cache_data(show_spinner=False, max_entries=64)
+def _cached_gauge_fig(score: float, recommendation: str):
+    return build_gauge(score, recommendation)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _cached_snowflake_fig(snowflake: dict):
+    return build_snowflake(snowflake)
+
+
+@st.cache_data(show_spinner=False, max_entries=64)
+def _cached_breakdown_fig(score_breakdown: dict):
+    return build_score_breakdown(score_breakdown)
+
+
+@st.cache_data(show_spinner=False, max_entries=128)
+def _cached_rr_fig(current_price: float, stop: float, target: float, ticker: str):
+    return build_rr_chart(current_price, stop, target, ticker)
 
 
 # ── State inicial ─────────────────────────────────────────────────────────
@@ -1180,7 +1257,7 @@ def render_overview(analysis: StockAnalysis):
     col_gauge, col_snow, col_bar = st.columns([1.2, 1, 1.5])
 
     with col_gauge:
-        fig = build_gauge(analysis.composite_score, analysis.recommendation)
+        fig = _cached_gauge_fig(analysis.composite_score, analysis.recommendation)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
                         key=f"chart_overview_gauge_{analysis.ticker}")
 
@@ -1202,12 +1279,12 @@ def render_overview(analysis: StockAnalysis):
         )
 
     with col_snow:
-        fig = build_snowflake(analysis.snowflake)
+        fig = _cached_snowflake_fig(analysis.snowflake)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
                         key=f"chart_overview_snowflake_{analysis.ticker}")
 
     with col_bar:
-        fig = build_score_breakdown(analysis.score_breakdown)
+        fig = _cached_breakdown_fig(analysis.score_breakdown)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
                         key=f"chart_overview_breakdown_{analysis.ticker}")
 
@@ -1380,12 +1457,11 @@ def render_overview(analysis: StockAnalysis):
 
     # Risk/Reward visual — usando PRECIO ACTUAL de yfinance como referencia
     if analysis.stop_loss and analysis.target_price:
-        from data.market_data import get_company_info
-        info_live = get_company_info(analysis.ticker) or {}
+        info_live = _cached_company_info(analysis.ticker) or {}
         current_price = info_live.get("current_price") or analysis.entry_price
         if current_price:
             st.markdown("---")
-            fig = build_rr_chart(current_price, analysis.stop_loss,
+            fig = _cached_rr_fig(current_price, analysis.stop_loss,
                                  analysis.target_price, analysis.ticker)
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
                             key=f"chart_overview_rr_{analysis.ticker}")
@@ -1402,12 +1478,12 @@ def render_technical(analysis: StockAnalysis):
     _render_agent_header(tech_report)
 
     # ── Gráfica principal (candlestick + MAs + RSI + MACD + Volumen) ──
-    from data.market_data import get_price_history, compute_technical_indicators
-    df = get_price_history(analysis.ticker, period="2y")
-    indicators = compute_technical_indicators(df) if not df.empty else {}
+    # Datos + figura memoizados en RAM: los reruns (clicks/tabs) no re-parsean
+    # JSON ni re-construyen la figura — misma frescura (TTL 15 min).
+    df, indicators = _hist_and_indicators(analysis.ticker, period="2y")
 
     st.markdown('<div class="section-title-bar">📈 Chart Multi-Indicador</div>', unsafe_allow_html=True)
-    fig = build_price_chart(df, indicators, analysis.ticker)
+    fig = _cached_price_fig(analysis.ticker, period="2y")
     st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": True},
                     key=f"chart_technical_price_{analysis.ticker}")
 
@@ -2226,13 +2302,12 @@ def render_risk(analysis: StockAnalysis):
 
     # ── R/R Chart visual — usando PRECIO ACTUAL como referencia ──
     if analysis.stop_loss and analysis.target_price:
-        from data.market_data import get_company_info
-        info_live = get_company_info(analysis.ticker) or {}
+        info_live = _cached_company_info(analysis.ticker) or {}
         current_price = info_live.get("current_price") or analysis.entry_price
         if current_price:
             st.markdown('<div class="section-title-bar">🎯 Upside / Downside vs Precio Actual</div>',
                         unsafe_allow_html=True)
-            fig = build_rr_chart(current_price, analysis.stop_loss,
+            fig = _cached_rr_fig(current_price, analysis.stop_loss,
                                  analysis.target_price, analysis.ticker)
             st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
                             key=f"chart_risk_tab_rr_{analysis.ticker}")
@@ -2740,8 +2815,6 @@ def render_scanner_config():
 def render_quick_view(ticker: str):
     """Dashboard compacto e instantáneo de una acción con datos en vivo de yfinance.
     Sin AI processing — todo se carga en 1-3 segundos."""
-    from data.market_data import get_company_info, get_price_history, get_news
-
     # Loading: skeleton + spinner centrado mientras cargan los datos
     loading_placeholder = st.empty()
     loading_placeholder.markdown(
@@ -2752,9 +2825,10 @@ def render_quick_view(ticker: str):
         unsafe_allow_html=True,
     )
 
-    info = get_company_info(ticker)
-    df = get_price_history(ticker, period="1y")
-    news = get_news(ticker, max_items=6)
+    # Memoizados en RAM: la segunda visita al mismo ticker es instantánea.
+    info = _cached_company_info(ticker)
+    df = _cached_price_history(ticker, period="1y")
+    news = _cached_news(ticker, max_items=6)
 
     loading_placeholder.empty()
 
@@ -2803,8 +2877,7 @@ def render_quick_view(ticker: str):
 
     with col_chart:
         st.markdown('<div class="qv-section-title">📈 PRECIO 6 MESES</div>', unsafe_allow_html=True)
-        from dashboard.charts import build_quick_chart
-        fig = build_quick_chart(df, ticker)
+        fig = _cached_quick_fig(ticker, period="1y")
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
                         key=f"chart_quickview_price_{ticker}")
 
