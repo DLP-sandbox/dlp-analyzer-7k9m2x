@@ -155,6 +155,11 @@ def get_company_info(ticker: str) -> dict:
         "float_shares":    info.get("floatShares", 0),
         "short_ratio":     info.get("shortRatio", 0),
         "short_percent":   info.get("shortPercentOfFloat", 0),
+        # Propiedad institucional/insider — vienen en el mismo .info que ya
+        # descargamos. Sirven de respaldo cuando la tabla detallada de
+        # institutional_holders se rate-limitea en cloud (Smart Money vacío).
+        "held_pct_institutions": info.get("heldPercentInstitutions"),
+        "held_pct_insiders":     info.get("heldPercentInsiders"),
         "beta":            info.get("beta", 1.0),
         "pe_ratio":        info.get("trailingPE", None),
         "forward_pe":      info.get("forwardPE", None),
@@ -196,16 +201,26 @@ def get_company_info(ticker: str) -> dict:
     # Fallback TradingView: si yfinance.info falló (rate-limit en cloud),
     # los campos críticos vienen vacíos. Los completamos con TV que no
     # se rate-limita desde IPs cloud.
+    # Incluye el SECTOR en el disparador: antes, si solo faltaba el sector
+    # (quedaba "Unknown") pero las métricas venían, el fallback no se
+    # activaba y el sector se mostraba "Unknown" en inglés. TV siempre trae
+    # sector/industry.
+    _sector = result.get("sector")
     needs_tv = (not result.get("market_cap") or
                 not result.get("pe_ratio") or
                 not result.get("ev_ebitda") or
                 not result.get("revenue_ttm") or
-                not result.get("profit_margin"))
+                not result.get("profit_margin") or
+                not _sector or _sector == "Unknown")
     if needs_tv:
         tv = _get_company_info_from_tradingview(ticker)
+        # "Unknown" es un placeholder truthy: se trata como vacío para que
+        # el fallback pueda sobrescribirlo con el valor real de TV.
+        _placeholder = {"Unknown", "unknown", ""}
         for k, v in tv.items():
-            # Solo rellenar campos que estén vacíos/None/0
-            if not result.get(k) and v is not None:
+            cur = result.get(k)
+            is_empty = (not cur) or (isinstance(cur, str) and cur in _placeholder)
+            if is_empty and v is not None:
                 result[k] = v
         # Re-derivar name si seguía con el ticker como nombre
         if result.get("name") == ticker and tv.get("name"):
@@ -388,11 +403,39 @@ def compute_quality_ratios(info: dict, financials: dict) -> dict:
     def safe(lst, idx=0):
         try:
             v = lst[idx]
-            return float(v) if v is not None else None
+            if v is None:
+                return None
+            f = float(v)
+            # yfinance devuelve NaN en el año fiscal más reciente cuando aún
+            # no hay resultados reportados (empresas con FY no-diciembre como
+            # NKE). NaN es "truthy" en Python y rompía los cálculos silencio-
+            # samente (ROIC/márgenes salían NaN → tiles vacíos). Lo tratamos
+            # como ausente para que la lógica caiga al primer año VÁLIDO.
+            return f if f == f else None  # f == f es False solo si es NaN
         except Exception:
             return None
 
+    def first_valid(lst):
+        """Primer valor no-nulo/no-NaN de una serie anual (índice 0..3).
+        Permite usar el último año fiscal con datos reales aunque el más
+        reciente venga NaN por no estar cerrado todavía."""
+        if not isinstance(lst, (list, tuple)):
+            v = safe([lst], 0)
+            return v
+        for i in range(len(lst)):
+            v = safe(lst, i)
+            if v is not None:
+                return v
+        return None
+
     r0, r1 = safe(rev, 0), safe(rev, 1)
+    # Versiones "primer año válido" para métricas de nivel (no de crecimiento):
+    # si el año reciente es NaN, usan el más reciente con datos reales.
+    rev_v = first_valid(rev)
+    oi_v  = first_valid(oi)
+    ni_v  = first_valid(ni)
+    gp_v  = first_valid(gp)
+    fcf_v = first_valid(fcf)
     # Revenue growth: preferir YF directo (TTM más actualizado que anual)
     rg_yf = info.get("revenue_growth_yf")
     if rg_yf is not None:
@@ -402,24 +445,26 @@ def compute_quality_ratios(info: dict, financials: dict) -> dict:
     else:
         ratios["revenue_growth_yoy"] = None
 
-    # Márgenes: preferir YF directo (decimales → %) sobre cálculo manual
+    # Márgenes: preferir YF directo (decimales → %) sobre cálculo manual.
+    # El fallback manual usa el primer año fiscal VÁLIDO (rev_v/gp_v/…) para
+    # que un año reciente NaN no vacíe la métrica.
     gm_yf = info.get("gross_margin_yf")
     if gm_yf is not None:
         ratios["gross_margin"] = float(gm_yf) * 100
-    elif r0 and safe(gp, 0):
-        ratios["gross_margin"] = safe(gp, 0) / r0 * 100
+    elif rev_v and gp_v:
+        ratios["gross_margin"] = gp_v / rev_v * 100
 
     om_yf = info.get("operating_margin_yf")
     if om_yf is not None:
         ratios["operating_margin"] = float(om_yf) * 100
-    elif r0 and safe(oi, 0):
-        ratios["operating_margin"] = safe(oi, 0) / r0 * 100
+    elif rev_v and oi_v:
+        ratios["operating_margin"] = oi_v / rev_v * 100
 
     pm_yf = info.get("profit_margin")
     if pm_yf is not None:
         ratios["net_margin"] = float(pm_yf) * 100
-    elif r0 and safe(ni, 0):
-        ratios["net_margin"] = safe(ni, 0) / r0 * 100
+    elif rev_v and ni_v:
+        ratios["net_margin"] = ni_v / rev_v * 100
 
     # Revenue growth 2Y CAGR
     r2 = safe(rev, 2)
@@ -439,21 +484,22 @@ def compute_quality_ratios(info: dict, financials: dict) -> dict:
     roe_yf = info.get("roe_yf")
     if roe_yf is not None:
         ratios["roe"] = float(roe_yf) * 100
-    elif safe(ni, 0) and equity and equity != 0:
-        ratios["roe"] = safe(ni, 0) / equity * 100
+    elif ni_v and equity and equity != 0:
+        ratios["roe"] = ni_v / equity * 100
 
-    # ROIC proxy
+    # ROIC proxy — usa el operating income del primer año fiscal válido
+    # (antes usaba índice 0, que es NaN en empresas con FY reciente sin cerrar).
     invested_capital = (equity or 0) + debt - cash
-    if safe(oi, 0) and invested_capital and invested_capital > 0:
-        ratios["roic"] = safe(oi, 0) * (1 - 0.21) / invested_capital * 100
+    if oi_v and invested_capital and invested_capital > 0:
+        ratios["roic"] = oi_v * (1 - 0.21) / invested_capital * 100
 
     # FCF Yield: preferir FCF TTM directo de YF
     fcf0 = safe(fcf, 0)
     fcf_yf = info.get("fcf_yf")
     if fcf_yf and mktcap and mktcap > 0:
         ratios["fcf_yield"] = float(fcf_yf) / mktcap * 100
-    elif fcf0 and mktcap and mktcap > 0:
-        ratios["fcf_yield"] = fcf0 / mktcap * 100
+    elif fcf_v and mktcap and mktcap > 0:
+        ratios["fcf_yield"] = fcf_v / mktcap * 100
 
     # Current ratio: preferir YF directo
     cr_yf = info.get("current_ratio_yf")
@@ -477,10 +523,10 @@ def compute_quality_ratios(info: dict, financials: dict) -> dict:
     if fcf0 and fcf1 and fcf1 != 0:
         ratios["fcf_growth_yoy"] = (fcf0 - fcf1) / abs(fcf1) * 100
 
-    # EV/Revenue
-    if mktcap and debt and cash and r0:
+    # EV/Revenue — usa el revenue del primer año fiscal válido
+    if mktcap and debt and cash and rev_v:
         ev = mktcap + debt - cash
-        ratios["ev_revenue"] = ev / r0 if r0 > 0 else None
+        ratios["ev_revenue"] = ev / rev_v if rev_v > 0 else None
 
     return ratios
 
@@ -658,10 +704,24 @@ def get_relative_strength(ticker: str, benchmark: str = "SPY", period: str = "1y
 
 # ── Holders e institucionales ──────────────────────────────────────────────
 
-def get_holders_data(ticker: str) -> dict:
+def get_holders_data(ticker: str, info: dict = None) -> dict:
+    """Datos de tenedores institucionales e insiders.
+
+    `info` es opcional (dict de get_company_info). Se usa como RESPALDO: la
+    tabla detallada `institutional_holders` de yfinance se rate-limitea mucho
+    en cloud y dejaba la sección Smart Money totalmente vacía. Cuando eso pasa,
+    rescatamos al menos el % de propiedad institucional/insider desde el .info
+    (que ya se descargó igual), para que la sección nunca quede en blanco.
+    Backward-compatible: llamadas antiguas sin `info` siguen funcionando."""
     key = f"holders_{ticker}"
     cached = _load_cache(key, ttl_hours=TTL_HOLDERS)
     if cached:
+        # Aun con caché, completar el % institucional si falta y hay info.
+        if info and cached.get("institutional_ownership_pct") in (None, 0):
+            hp = info.get("held_pct_institutions")
+            if hp:
+                cached["institutional_ownership_pct"] = float(hp) * 100
+                cached["institutional_ownership_source"] = "info_fallback"
         return cached
 
     stock = yf.Ticker(ticker)
@@ -691,6 +751,19 @@ def get_holders_data(ticker: str) -> dict:
             result["major_holders_raw"] = mh.to_dict()
     except Exception:
         pass
+
+    # ── RESPALDO: si la tabla institucional falló (rate-limit cloud), usar
+    # el % de propiedad del .info para no dejar la sección vacía. ──
+    if info:
+        if result.get("institutional_ownership_pct") in (None, 0):
+            hp = info.get("held_pct_institutions")
+            if hp:
+                result["institutional_ownership_pct"] = float(hp) * 100
+                result["institutional_ownership_source"] = "info_fallback"
+        if result.get("insider_ownership_pct") in (None, 0):
+            hi = info.get("held_pct_insiders")
+            if hi:
+                result["insider_ownership_pct"] = float(hi) * 100
 
     _save_cache(key, result)
     return result

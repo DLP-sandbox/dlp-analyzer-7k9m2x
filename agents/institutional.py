@@ -48,8 +48,10 @@ class InstitutionalAgent(BaseAgent):
 
     def analyze(self, ticker: str, data: dict = None) -> AgentReport:
         try:
-            holders = get_holders_data(ticker)
+            # info primero: se pasa a get_holders_data como respaldo del %
+            # institucional cuando la tabla detallada se rate-limitea (cloud).
             info = get_company_info(ticker)
+            holders = get_holders_data(ticker, info=info)
 
             user_message = self._build_message(ticker, info, holders)
             result = self._call_claude(SYSTEM_PROMPT, user_message)
