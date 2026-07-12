@@ -65,7 +65,11 @@ st.markdown(BLOOMBERG_CSS, unsafe_allow_html=True)
 # ruta caliente). st.cache_data memoiza en RAM con TTL alineado al caché de
 # disco: los reruns repetidos cuestan ~0ms sin cambiar la frescura de datos.
 
-@st.cache_data(ttl=900, show_spinner=False)
+# max_entries acota la memoria: en Streamlit Cloud (~1GB RAM) cachear
+# DataFrames de 2 años y figuras Plotly sin límite podía acumularse hasta
+# agotar la memoria y matar el contenedor ("error running app" aleatorio).
+# Con un tope, el caché sigue acelerando pero nunca crece sin control.
+@st.cache_data(ttl=900, show_spinner=False, max_entries=24)
 def _hist_and_indicators(ticker: str, period: str = "2y"):
     from data.market_data import get_price_history, compute_technical_indicators
     df = get_price_history(ticker, period=period)
@@ -73,35 +77,47 @@ def _hist_and_indicators(ticker: str, period: str = "2y"):
     return df, ind
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=24)
 def _cached_price_history(ticker: str, period: str = "1y"):
     from data.market_data import get_price_history
     return get_price_history(ticker, period=period)
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=48)
 def _cached_company_info(ticker: str) -> dict:
     from data.market_data import get_company_info
     return get_company_info(ticker)
 
 
-@st.cache_data(ttl=600, show_spinner=False)
+@st.cache_data(ttl=600, show_spinner=False, max_entries=48)
 def _cached_news(ticker: str, max_items: int = 6):
     from data.market_data import get_news
     return get_news(ticker, max_items=max_items)
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=16)
 def _cached_price_fig(ticker: str, period: str = "2y"):
     df, ind = _hist_and_indicators(ticker, period)
     return build_price_chart(df, ind, ticker)
 
 
-@st.cache_data(ttl=900, show_spinner=False)
+@st.cache_data(ttl=900, show_spinner=False, max_entries=16)
 def _cached_quick_fig(ticker: str, period: str = "1y"):
     from dashboard.charts import build_quick_chart
     df = _cached_price_history(ticker, period)
     return build_quick_chart(df, ticker)
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=48)
+def _cached_holders(ticker: str, _info: dict = None):  # noqa: ARG001 (_info: no-hash)
+    """Holders/institucional con el fallback de get_holders_data (usa _info
+    para rescatar el % institucional cuando la tabla detallada se rate-limitea).
+    El guion bajo en _info evita que Streamlit intente hashear el dict grande."""
+    from data.market_data import get_holders_data
+    try:
+        return get_holders_data(ticker, info=_info)
+    except Exception:
+        return {}
 
 
 # Figuras deterministas del overview: mismos args → misma figura. Sin TTL,
@@ -1089,6 +1105,58 @@ def _translate_status(text):
     return result
 
 
+# Mapa GICS/yfinance → español. Si un sector real no está en el mapa, se deja
+# tal cual (ya es informativo); solo "Unknown"/vacío se trata como ausente.
+SECTOR_ES = {
+    "technology": "Tecnología",
+    "financial services": "Financiero",
+    "financials": "Financiero",
+    "healthcare": "Salud",
+    "health care": "Salud",
+    "consumer cyclical": "Consumo Cíclico",
+    "consumer discretionary": "Consumo Discrecional",
+    "consumer defensive": "Consumo Básico",
+    "consumer staples": "Consumo Básico",
+    "energy": "Energía",
+    "industrials": "Industriales",
+    "basic materials": "Materiales",
+    "materials": "Materiales",
+    "real estate": "Inmobiliario",
+    "utilities": "Servicios Públicos",
+    "communication services": "Comunicaciones",
+    "communication": "Comunicaciones",
+}
+
+
+def _translate_sector(sector):
+    """Traduce un sector a español. Devuelve None si es vacío/'Unknown'."""
+    if not sector or not isinstance(sector, str):
+        return None
+    s = sector.strip()
+    if not s or s.lower() in ("unknown", "desconocido", "n/a", "none", "null", "—"):
+        return None
+    return SECTOR_ES.get(s.lower(), s)
+
+
+def _resolve_sector(analysis, rd):
+    """Sector robusto para mostrar: reporte guardado → top-level del análisis →
+    datos vivos (con los fixes de la capa de datos) → traducido a español.
+    Devuelve '—' solo si de verdad no hay ningún sector disponible. Arregla
+    NKE y small-caps sin depender de re-analizar."""
+    for cand in (rd.get("sector"), getattr(analysis, "sector", None)):
+        t = _translate_sector(cand)
+        if t:
+            return t
+    try:
+        info = _cached_company_info(getattr(analysis, "ticker", "")) or {}
+        t = _translate_sector(info.get("sector"))
+        if t:
+            return t
+    except Exception:
+        pass
+    return "—"
+
+
 def _clean_tile_value(value, max_len=22):
     """Limpia valor para tile: quita paréntesis, descripciones largas, traduce y trunca."""
     if value is None or value == "":
@@ -1881,15 +1949,43 @@ def render_institutional(analysis: StockAnalysis):
     insider_level = "good" if "bullish" in insider_raw.lower() else "bad" if "bearish" in insider_raw.lower() else "neutral"
     squeeze_level = "good" if "high" in squeeze_raw.lower() else "neutral" if "medium" in squeeze_raw.lower() else "warn"
 
+    # Valores con FALLBACK a datos vivos (rescata NKE/small-caps y análisis
+    # viejos guardados vacíos, cuando institutional_holders se rate-limiteó).
+    # Todo cacheado y protegido: nunca crashea, y solo rellena lo que falta.
+    inst_pct = _extract_percent(inst_raw)
+    short_pct = _extract_percent(short_raw)
+    top_inst = holders_raw.get("top_institutions") or []
+    if inst_pct == "—" or short_pct == "—" or not top_inst:
+        try:
+            _info = _cached_company_info(analysis.ticker) or {}
+        except Exception:
+            _info = {}
+        try:
+            _hold = _cached_holders(analysis.ticker, _info) or {}
+        except Exception:
+            _hold = {}
+        if inst_pct == "—":
+            _v = _hold.get("institutional_ownership_pct")
+            if not _v and _info.get("held_pct_institutions"):
+                _v = float(_info["held_pct_institutions"]) * 100
+            if _v:
+                inst_pct = f"{float(_v):.1f}%"
+        if short_pct == "—":
+            _sp = _info.get("short_percent")
+            if _sp:
+                short_pct = f"{float(_sp) * 100:.1f}%"
+        if not top_inst:
+            top_inst = _hold.get("top_institutions") or []
+
     _render_status_pills([
         {"label": "Propiedad Institucional",
-         "value": _extract_percent(inst_raw),
+         "value": inst_pct,
          "level": "good", "sub": "% del outstanding"},
         {"label": "Señal de Insiders",
          "value": _clean_tile_value(insider_raw, max_len=12),
          "level": insider_level, "sub": "Compras vs ventas"},
         {"label": "Short Interest",
-         "value": _extract_percent(short_raw),
+         "value": short_pct,
          "level": "neutral", "sub": "% del float"},
         {"label": "Potencial Squeeze",
          "value": _clean_tile_value(squeeze_raw, max_len=12),
@@ -1897,7 +1993,6 @@ def render_institutional(analysis: StockAnalysis):
     ])
 
     # ── Top holders bar chart ──
-    top_inst = holders_raw.get("top_institutions") or []
     if top_inst:
         fig = build_holders_bars(top_inst)
         st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
@@ -2091,7 +2186,7 @@ def render_macro(analysis: StockAnalysis):
          "level": env_level, "sub": "Risk On / Off"},
         {"label": "Momentum Sector",
          "value": _clean_tile_value(sec_raw, max_len=12),
-         "level": sec_level, "sub": f"Sector: {rd.get('sector', '—')}"},
+         "level": sec_level, "sub": f"Sector: {_resolve_sector(analysis, rd)}"},
         {"label": "Curva Yield",
          "value": _clean_tile_value(yc_raw, max_len=12),
          "level": yc_level, "sub": "10Y-2Y spread"},

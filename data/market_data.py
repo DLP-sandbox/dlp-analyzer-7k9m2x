@@ -75,12 +75,24 @@ def get_price_history(ticker: str, period: str = "2y", interval: str = "1d") -> 
         df.index = pd.to_datetime(df.index)
         return df
 
-    stock = yf.Ticker(ticker)
-    df = stock.history(period=period, interval=interval, auto_adjust=True)
-    if df.empty:
-        return df
+    # yfinance puede lanzar (rate-limit/red, muy común en cloud). Antes esto
+    # NO estaba protegido y una excepción aquí crasheaba el render entero de
+    # Streamlit ("error running app" aleatorio). Ahora nunca propagamos: si
+    # falla, devolvemos DataFrame vacío y todo el código aguas abajo ya maneja
+    # df.empty sin romperse (misma defensa que get_company_info/get_holders_data).
+    try:
+        stock = yf.Ticker(ticker)
+        df = stock.history(period=period, interval=interval, auto_adjust=True)
+    except Exception:
+        return pd.DataFrame()
 
-    _save_cache(key, df.to_dict())
+    if df is None or df.empty:
+        return pd.DataFrame() if df is None else df
+
+    try:
+        _save_cache(key, df.to_dict())
+    except Exception:
+        pass
     return df
 
 
