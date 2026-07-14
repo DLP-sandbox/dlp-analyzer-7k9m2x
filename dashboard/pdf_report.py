@@ -51,6 +51,34 @@ TEXT_LO    = HexColor("#7A8898")
 TEXT_DIM   = HexColor("#5A6878")
 BORDER     = HexColor("#1E2530")
 
+
+# ── Sistema de tonos (calidad percibida) ─────────────────────────────────
+# Los colores semánticos full-saturación (verde/rojo/oro puros) se ven
+# chillones usados en bordes y números grandes. Estas variantes conservan
+# la semántica pero con acabado premium:
+#   _border_of → borde hair-line apagado (el color se insinúa, no grita)
+#   _tint_of   → relleno de tarjeta con un tinte sutil del color
+#   _num_of    → color de número grande: suavizado hacia blanco (pastel rico)
+def _mix(c1: Color, c2: Color, t: float) -> Color:
+    """Interpola linealmente entre dos colores. t=0 → c1, t=1 → c2."""
+    return Color(
+        c1.red + (c2.red - c1.red) * t,
+        c1.green + (c2.green - c1.green) * t,
+        c1.blue + (c2.blue - c1.blue) * t,
+    )
+
+
+def _border_of(color: Color) -> Color:
+    return _mix(color, BG_DEEP, 0.55)
+
+
+def _tint_of(color: Color) -> Color:
+    return _mix(color, BG_CARD, 0.93)
+
+
+def _num_of(color: Color) -> Color:
+    return _mix(color, TEXT_HI, 0.22)
+
 # ── Paths ───────────────────────────────────────────────────────────────
 ASSETS_DIR = Path(__file__).parent.parent / "assets"
 FONTS_DIR  = ASSETS_DIR / "fonts"
@@ -230,6 +258,51 @@ def _wrap(c, txt, x, top, width, *, font=None, size=12, color=TEXT_MD,
         c.drawString(x, _y(cy), ln)
         cy += lh
     return cy
+
+
+def _wrap_lines(c, txt, width, *, font=None, size=12, max_lines=None) -> list:
+    """Solo calcula las líneas del wrap (sin dibujar). Para poder centrar."""
+    if font is None:
+        font = FONT_REG
+    if not txt:
+        return []
+    words = str(txt).split()
+    lines, line = [], ""
+    for w in words:
+        test = (line + " " + w).strip()
+        if c.stringWidth(test, font, size) > width and line:
+            lines.append(line)
+            line = w
+        else:
+            line = test
+    if line:
+        lines.append(line)
+    if max_lines and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        last = lines[-1]
+        while c.stringWidth(last + "…", font, size) > width and last:
+            last = last[:-1]
+        lines[-1] = last.rstrip() + "…"
+    return lines
+
+
+def _wrap_vcenter(c, txt, x, card_top, card_h, width, *, font=None, size=12,
+                  color=TEXT_MD, line_height=1.35, max_lines=2):
+    """Texto con wrap CENTRADO verticalmente dentro de una tarjeta de altura
+    card_h. Evita el texto 'flotando arriba' en tarjetas altas."""
+    if font is None:
+        font = FONT_REG
+    lines = _wrap_lines(c, txt, width, font=font, size=size, max_lines=max_lines)
+    if not lines:
+        return
+    lh = size * line_height
+    block_h = lh * (len(lines) - 1) + size
+    cy = card_top + (card_h - block_h) / 2 + size * 0.82  # baseline 1ª línea
+    c.setFont(font, size)
+    c.setFillColor(color)
+    for ln in lines:
+        c.drawString(x, _y(cy), ln)
+        cy += lh
 
 
 def _score_color(score) -> Color:
@@ -880,7 +953,7 @@ def _page_1_synthesis(c, a):
     hero_top = MARGIN_Y
     hero_h = 240
     _box(c, MARGIN_X, hero_top, PAGE_W - 2*MARGIN_X, hero_h,
-         r=14, fill=BG_CARD, stroke=ORANGE, stroke_w=1)
+         r=14, fill=BG_CARD, stroke=_border_of(ORANGE), stroke_w=1)
 
     # Brand top-right
     _text(c, "◈  ANALIZADOR DLP", PAGE_W - MARGIN_X - 28, hero_top + 26,
@@ -911,12 +984,12 @@ def _page_1_synthesis(c, a):
               font=FONT_REG, size=14, color=GOLD,
               line_height=1.3, max_lines=1)
 
-    # Composite score (right side)
+    # Composite score (right side) — número en tono premium, no neón
     sc_f = _to_float(a.composite_score)
     sc_color = _score_color(sc_f if sc_f is not None else 50)
     _text(c, f"{sc_f:.1f}" if sc_f is not None else "—",
           PAGE_W - MARGIN_X - 60, hero_top + 130,
-          font=FONT_DISPLAY_XL, size=84, color=sc_color, anchor="right")
+          font=FONT_DISPLAY_XL, size=84, color=_num_of(sc_color), anchor="right")
     _text(c, "PUNTAJE GLOBAL  /  100", PAGE_W - MARGIN_X - 60, hero_top + 168,
           font=FONT_DISPLAY, size=12, color=TEXT_LO, anchor="right")
 
@@ -945,8 +1018,9 @@ def _page_1_synthesis(c, a):
 
     # ── CENTRO: DASHBOARD 3-PANEL (gauge | snowflake | desglose) ────────
     # Mirroring del Overview real de la app — 3 cards visuales lado a lado.
+    # mid_h reducido (500→430) para dar espacio a la franja de TESIS abajo.
     mid_top = hero_top + hero_h + 22
-    mid_h = 500
+    mid_h = 430
     gap_card = 18
     panel_w = (PAGE_W - 2 * MARGIN_X - gap_card * 2) / 3  # ≈ 581pt
 
@@ -1195,9 +1269,33 @@ def _page_1_synthesis(c, a):
                   font=FONT_DISPLAY_XL, size=13, color=col)
             by += 42
 
-    # ── FOOTER: 5 KPI TILES ─────────────────────────────────────────────
-    foot_top = mid_top + mid_h + 22
-    foot_h = 160
+    # ── FRANJA DE TESIS — la teoría en palabras claras ──────────────────
+    # Lo que faltaba: ANTES el PDF era solo datos; esta franja explica en
+    # 2-3 líneas simples POR QUÉ la acción tiene el veredicto que tiene.
+    thesis_top = mid_top + mid_h + 18
+    thesis_h = 96
+    _box(c, MARGIN_X, thesis_top, PAGE_W - 2*MARGIN_X, thesis_h, r=12,
+         fill=BG_CARD, stroke=_border_of(ORANGE), stroke_w=1)
+    c.setFillColor(ORANGE)
+    c.rect(MARGIN_X, _y(thesis_top + thesis_h), 4, thesis_h, fill=1, stroke=0)
+    _text(c, "LA TESIS EN CORTO", MARGIN_X + 28, thesis_top + 30,
+          font=FONT_DISPLAY, size=14, color=ORANGE)
+    thesis_txt = _truncate_by_sentence(
+        _simplify_lang(a.investment_thesis or ""), 330)
+    if not thesis_txt or len(thesis_txt) < 40:
+        thesis_txt = _alpha_simple(a) or (
+            "Puntaje global de "
+            + (f"{sc_f:.0f}" if sc_f is not None else "—")
+            + "/100. Revisa las fortalezas y debilidades de la última página "
+              "para entender qué pesa a favor y qué pesa en contra.")
+    _wrap(c, thesis_txt, MARGIN_X + 28, thesis_top + 56,
+          width=PAGE_W - 2*MARGIN_X - 56,
+          font=FONT_REG, size=16, color=TEXT_MD,
+          line_height=1.35, max_lines=2)
+
+    # ── FOOTER: 3 TILES DE PRECIO (rediseñados: tinte sutil, no neón) ───
+    foot_top = thesis_top + thesis_h + 18
+    foot_h = 148
 
     entry_f  = _to_float(a.entry_price)
     stop_f   = _to_float(a.stop_loss)
@@ -1216,33 +1314,41 @@ def _page_1_synthesis(c, a):
         try: reward_pct = (target_f - entry_f) / entry_f * 100
         except Exception: reward_pct = None
 
-    stop_sub = f"hasta −{abs(risk_pct):.1f}%" if risk_pct else ""
-    tgt_sub  = f"hasta +{reward_pct:.1f}%" if reward_pct else ""
+    stop_sub = (f"riesgo estimado: −{abs(risk_pct):.1f}%" if risk_pct
+                else "piso estimado si sale mal")
+    tgt_sub  = (f"recorrido posible: +{reward_pct:.1f}%" if reward_pct
+                else "objetivo si la tesis se cumple")
 
     # SOLO 3 tiles: Precio Actual / Precio Mínimo / Precio Potencial
     # Sin R/R, sin Sizing, sin terminología de trading.
     tiles = [
-        ("PRECIO ACTUAL",     fmt_money(a.entry_price),  ORANGE, "del último cierre"),
-        ("PRECIO MÍNIMO",     fmt_money(a.stop_loss),    RED,    stop_sub or "potencial"),
-        ("PRECIO POTENCIAL",  fmt_money(a.target_price), GREEN,  tgt_sub or "objetivo"),
+        ("PRECIO ACTUAL",     fmt_money(a.entry_price),  ORANGE, "lo que cuesta hoy · último cierre"),
+        ("PRECIO MÍNIMO",     fmt_money(a.stop_loss),    RED,    stop_sub),
+        ("PRECIO POTENCIAL",  fmt_money(a.target_price), GREEN,  tgt_sub),
     ]
     gap = 24
     total_w = PAGE_W - 2 * MARGIN_X
     tw = (total_w - gap * 2) / 3
     for i, (label, value, color, sub) in enumerate(tiles):
         x = MARGIN_X + i * (tw + gap)
+        # Tinte sutil + borde apagado (antes: borde a color pleno, chillón)
         _box(c, x, foot_top, tw, foot_h, r=12,
-             fill=BG_CARD, stroke=color, stroke_w=1.5)
-        # Accent strip top
+             fill=_tint_of(color), stroke=_border_of(color), stroke_w=1)
+        # Acento superior fino — único toque de color pleno
         c.setFillColor(color)
-        c.rect(x, _y(foot_top + 5), tw, 5, fill=1, stroke=0)
+        c.rect(x, _y(foot_top + 4), tw, 4, fill=1, stroke=0)
+        # Punto indicador + label
+        c.setFillColor(color)
+        c.circle(x + tw/2 - c.stringWidth(label, FONT_DISPLAY, 17)/2 - 16,
+                 _y(foot_top + 40), 5, fill=1, stroke=0)
         _text(c, label, x + tw/2, foot_top + 46,
-              font=FONT_DISPLAY, size=20, color=TEXT_LO, anchor="center")
-        _text(c, value, x + tw/2, foot_top + 105,
-              font=FONT_DISPLAY_XL, size=48, color=color, anchor="center")
+              font=FONT_DISPLAY, size=17, color=TEXT_LO, anchor="center")
+        # Número en tono premium (suavizado, no neón)
+        _text(c, value, x + tw/2, foot_top + 98,
+              font=FONT_DISPLAY_XL, size=44, color=_num_of(color), anchor="center")
         if sub:
-            _text(c, sub, x + tw/2, foot_top + 138,
-                  font=FONT_REG, size=15, color=TEXT_LO, anchor="center")
+            _text(c, sub, x + tw/2, foot_top + 128,
+                  font=FONT_REG, size=14, color=TEXT_LO, anchor="center")
 
     # Disclaimer
     _text(c, "Análisis educativo · No constituye recomendación de inversión",
@@ -1302,38 +1408,31 @@ def _build_simple_price_chart(a):
 
     fig = go.Figure()
 
-    # Capa 1 — glow exterior (línea muy gruesa, alfa bajo)
+    # Glow sutil (una sola capa tenue — antes había 2 capas gruesas que se
+    # veían como un halo pesado poco elegante)
     fig.add_trace(go.Scatter(
         x=dates, y=prices,
         mode="lines",
-        line=dict(color="rgba(255,184,77,0.18)", width=24,
+        line=dict(color="rgba(255,184,77,0.14)", width=11,
                   shape="spline", smoothing=0.5),
         hoverinfo="skip", showlegend=False,
     ))
-    # Capa 2 — glow interno
+    # Línea principal + fill gradient debajo
     fig.add_trace(go.Scatter(
         x=dates, y=prices,
         mode="lines",
-        line=dict(color="rgba(255,184,77,0.35)", width=12,
-                  shape="spline", smoothing=0.5),
-        hoverinfo="skip", showlegend=False,
-    ))
-    # Capa 3 — fill gradient debajo
-    fig.add_trace(go.Scatter(
-        x=dates, y=prices,
-        mode="lines",
-        line=dict(color="#FFB84D", width=5,
+        line=dict(color="#FFB84D", width=3.5,
                   shape="spline", smoothing=0.5),
         fill="tozeroy",
-        fillcolor="rgba(255,184,77,0.10)",
+        fillcolor="rgba(255,184,77,0.08)",
         hoverinfo="skip", showlegend=False,
     ))
-    # Marker del precio actual
+    # Marker del precio actual (punto vivo discreto)
     fig.add_trace(go.Scatter(
         x=[dates[-1]], y=[prices[-1]],
         mode="markers",
-        marker=dict(size=24, color="#FFD740",
-                    line=dict(width=5, color="white")),
+        marker=dict(size=16, color="#FFD740",
+                    line=dict(width=3, color="white")),
         hoverinfo="skip", showlegend=False,
     ))
 
@@ -1371,9 +1470,10 @@ def _page_2_finance_technical(c, a):
     _text(c, f"PUNTAJE GENERAL   {sc_f:.1f}  /  100" if sc_f is not None else "PUNTAJE GENERAL   —  /  100",
           PAGE_W - MARGIN_X, MARGIN_Y + 62,
           font=FONT_DISPLAY, size=30,
-          color=_score_color(sc_f if sc_f is not None else 50), anchor="right")
+          color=_num_of(_score_color(sc_f if sc_f is not None else 50)),
+          anchor="right")
 
-    c.setStrokeColor(ORANGE)
+    c.setStrokeColor(_border_of(ORANGE))
     c.setLineWidth(1)
     c.line(MARGIN_X, _y(MARGIN_Y + 108), PAGE_W - MARGIN_X, _y(MARGIN_Y + 108))
 
@@ -1400,22 +1500,28 @@ def _page_2_finance_technical(c, a):
           fx + 32, top_y + 82,
           font=FONT_REG, size=17, color=TEXT_LO)
 
-    # Score grande arriba a la derecha
+    # Score grande arriba a la derecha (tono premium)
     _text(c, f"{fund_score:.0f}", fx + col_w - 32, top_y + 60,
-          font=FONT_DISPLAY_XL, size=58, color=fund_color, anchor="right")
+          font=FONT_DISPLAY_XL, size=58, color=_num_of(fund_color), anchor="right")
     _text(c, "DE 100", fx + col_w - 32, top_y + 92,
           font=FONT_DISPLAY, size=14, color=TEXT_LO, anchor="right")
 
-    # Veredicto en banda destacada
+    # Veredicto en banda destacada (tinte sutil, borde apagado)
     verdict_text, verdict_col = _verdict_stability(fund_score)
     vb_top = top_y + 120
     vb_h = 66
     _box(c, fx + 24, vb_top, col_w - 48, vb_h, r=10,
-         fill=BG_CARD2, stroke=verdict_col, stroke_w=1)
+         fill=_tint_of(verdict_col), stroke=_border_of(verdict_col), stroke_w=1)
     c.setFillColor(verdict_col)
-    c.circle(fx + 54, _y(vb_top + vb_h/2), 8, fill=1, stroke=0)
+    c.circle(fx + 54, _y(vb_top + vb_h/2), 7, fill=1, stroke=0)
     _text(c, verdict_text, fx + 76, vb_top + vb_h/2 + 7,
-          font=FONT_DISPLAY, size=22, color=verdict_col)
+          font=FONT_DISPLAY, size=22, color=_num_of(verdict_col))
+
+    # Teoría en una línea: qué estás viendo en este panel
+    _wrap(c, "Los fundamentales miden la salud del negocio: cuánto crece, "
+             "cuánto gana de verdad y cuánto debe. Es la base de todo.",
+          fx + 26, vb_top + vb_h + 26, width=col_w - 52,
+          font=FONT_REG, size=14, color=TEXT_LO, line_height=1.3, max_lines=2)
 
     # Métricas clave (2 columnas × 3 filas = 6 KPIs)
     km = (fund_rpt.key_metrics or {}) if fund_rpt else {}
@@ -1455,13 +1561,13 @@ def _page_2_finance_technical(c, a):
          "capacidad pago corto plazo"),
     ]
 
-    m_top = vb_top + vb_h + 30
+    m_top = vb_top + vb_h + 62   # deja sitio a la línea de teoría
     m_gap_x = 18
     m_gap_y = 14
     m_cols = 2
     m_rows = 3
     m_card_w = (col_w - 48 - m_gap_x) / m_cols
-    m_card_h = (avail_h - (vb_top - top_y) - vb_h - 50 - m_gap_y * (m_rows - 1)) / m_rows
+    m_card_h = (avail_h - (vb_top - top_y) - vb_h - 82 - m_gap_y * (m_rows - 1)) / m_rows
 
     for i, (label, value, sub) in enumerate(metrics):
         r_ix = i // m_cols
@@ -1493,25 +1599,31 @@ def _page_2_finance_technical(c, a):
           tx_x + 32, top_y + 82,
           font=FONT_REG, size=17, color=TEXT_LO)
     _text(c, f"{tech_score:.0f}", tx_x + col_w - 32, top_y + 60,
-          font=FONT_DISPLAY_XL, size=58, color=tech_color, anchor="right")
+          font=FONT_DISPLAY_XL, size=58, color=_num_of(tech_color), anchor="right")
     _text(c, "DE 100", tx_x + col_w - 32, top_y + 92,
           font=FONT_DISPLAY, size=14, color=TEXT_LO, anchor="right")
 
-    # Veredicto técnico
+    # Veredicto técnico (tinte sutil, borde apagado)
     stage_val = (tech_rpt.key_metrics or {}).get("stage", "") if tech_rpt else ""
     vt_text, vt_col = _verdict_trend(tech_score, stage_val)
     vtb_top = top_y + 120
     vtb_h = 66
     _box(c, tx_x + 24, vtb_top, col_w - 48, vtb_h, r=10,
-         fill=BG_CARD2, stroke=vt_col, stroke_w=1)
+         fill=_tint_of(vt_col), stroke=_border_of(vt_col), stroke_w=1)
     c.setFillColor(vt_col)
-    c.circle(tx_x + 54, _y(vtb_top + vtb_h/2), 8, fill=1, stroke=0)
+    c.circle(tx_x + 54, _y(vtb_top + vtb_h/2), 7, fill=1, stroke=0)
     _text(c, vt_text, tx_x + 76, vtb_top + vtb_h/2 + 7,
-          font=FONT_DISPLAY, size=22, color=vt_col)
+          font=FONT_DISPLAY, size=22, color=_num_of(vt_col))
+
+    # Teoría en una línea: qué mide (y qué NO mide) la tendencia
+    _wrap(c, "La tendencia dice cómo se mueve el precio y su momento — no si "
+             "el negocio es bueno. Sirve para elegir CUÁNDO, no QUÉ.",
+          tx_x + 26, vtb_top + vtb_h + 26, width=col_w - 52,
+          font=FONT_REG, size=14, color=TEXT_LO, line_height=1.3, max_lines=2)
 
     # Chart de línea
-    chart_top = vtb_top + vtb_h + 22
-    chart_h = avail_h - (vtb_top - top_y) - vtb_h - 100
+    chart_top = vtb_top + vtb_h + 58
+    chart_h = avail_h - (vtb_top - top_y) - vtb_h - 136
     try:
         pc_fig = _build_simple_price_chart(a)
         if pc_fig is not None:
@@ -1558,9 +1670,10 @@ def _page_3_pillars(c, a):
     _text(c, f"PUNTAJE GENERAL   {sc_f:.1f}  /  100" if sc_f is not None else "PUNTAJE GENERAL   —  /  100",
           PAGE_W - MARGIN_X, MARGIN_Y + 62,
           font=FONT_DISPLAY, size=30,
-          color=_score_color(sc_f if sc_f is not None else 50), anchor="right")
+          color=_num_of(_score_color(sc_f if sc_f is not None else 50)),
+          anchor="right")
 
-    c.setStrokeColor(ORANGE)
+    c.setStrokeColor(_border_of(ORANGE))
     c.setLineWidth(1)
     c.line(MARGIN_X, _y(MARGIN_Y + 108), PAGE_W - MARGIN_X, _y(MARGIN_Y + 108))
 
@@ -1572,6 +1685,10 @@ def _page_3_pillars(c, a):
     _text(c, "PUNTAJES  ·  8 DIMENSIONES",
           MARGIN_X + 32, sb_top + 34,
           font=FONT_DISPLAY, size=17, color=ORANGE)
+    # Cómo leer los colores — teoría en una línea
+    _text(c, "cada dimensión va de 0 a 100  ·  verde = a favor  ·  ámbar = neutral  ·  rojo = en contra",
+          PAGE_W - MARGIN_X - 32, sb_top + 34,
+          font=FONT_REG, size=13, color=TEXT_LO, anchor="right")
 
     # 8 pills colocadas horizontalmente, color por score
     sb = a.score_breakdown or {}
@@ -1595,15 +1712,15 @@ def _page_3_pillars(c, a):
         s = _to_float(score, default=50.0)
         col = _score_color(s)
         px = MARGIN_X + 30 + i * (pill_w + pill_gap)
-        # Pill body
+        # Pill body — tinte sutil + borde apagado (antes: borde neón 1.5w)
         _box(c, px, pill_y_top, pill_w, pill_h, r=8,
-             fill=BG_CARD2, stroke=col, stroke_w=1.5)
+             fill=_tint_of(col), stroke=_border_of(col), stroke_w=1)
         # Accent left bar
         c.setFillColor(col)
         c.rect(px, _y(pill_y_top + pill_h), 4, pill_h, fill=1, stroke=0)
-        # Score grande
+        # Score grande en tono premium
         _text(c, f"{s:.0f}", px + 16, pill_y_top + 40,
-              font=FONT_DISPLAY_XL, size=30, color=col)
+              font=FONT_DISPLAY_XL, size=30, color=_num_of(col))
         # Label arriba derecha
         _text(c, label.upper(), px + pill_w - 10, pill_y_top + 22,
               font=FONT_DISPLAY, size=12, color=TEXT_LO, anchor="right")
@@ -1692,11 +1809,11 @@ def _page_3_pillars(c, a):
 
         # ── HEADER de card (compacto) ──
         _text(c, sym, cx + 22, ctop + 42,
-              font=FONT_BOLD, size=26, color=sc_color)
+              font=FONT_BOLD, size=26, color=_num_of(sc_color))
         _text(c, title, cx + 54, ctop + 40,
               font=FONT_DISPLAY, size=20, color=TEXT_HI)
         _text(c, f"{score:.0f}", cx + card_w - 24, ctop + 42,
-              font=FONT_DISPLAY_XL, size=32, color=sc_color, anchor="right")
+              font=FONT_DISPLAY_XL, size=32, color=_num_of(sc_color), anchor="right")
         _text(c, "/100", cx + card_w - 24, ctop + 60,
               font=FONT_BOLD, size=12, color=TEXT_LO, anchor="right")
 
@@ -1771,18 +1888,18 @@ def _build_price_journey_chart(a):
     fig = go.Figure()
     # Glow exterior + interior + línea + fill (igual que el simple chart)
     fig.add_trace(go.Scatter(x=dates, y=prices, mode="lines",
-        line=dict(color="rgba(255,184,77,0.18)", width=24, shape="spline", smoothing=0.5),
+        line=dict(color="rgba(255,184,77,0.14)", width=11, shape="spline", smoothing=0.5),
         hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(x=dates, y=prices, mode="lines",
-        line=dict(color="rgba(255,184,77,0.35)", width=12, shape="spline", smoothing=0.5),
+        line=dict(color="rgba(255,184,77,0.0)", width=1, shape="spline", smoothing=0.5),
         hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(x=dates, y=prices, mode="lines",
-        line=dict(color="#FFB84D", width=5, shape="spline", smoothing=0.5),
-        fill="tozeroy", fillcolor="rgba(255,184,77,0.10)",
+        line=dict(color="#FFB84D", width=3.5, shape="spline", smoothing=0.5),
+        fill="tozeroy", fillcolor="rgba(255,184,77,0.08)",
         hoverinfo="skip", showlegend=False))
     # Marker del precio actual
     fig.add_trace(go.Scatter(x=[dates[-1]], y=[prices[-1]], mode="markers",
-        marker=dict(size=26, color="#FFD740", line=dict(width=5, color="white")),
+        marker=dict(size=16, color="#FFD740", line=dict(width=3, color="white")),
         hoverinfo="skip", showlegend=False))
 
     # Líneas horizontales para min/actual/potencial
@@ -1849,13 +1966,17 @@ def _page_4_finale(c, a):
           font=FONT_DISPLAY_XL, size=44, color=TEXT_HI)
     _text(c, a.ticker, PAGE_W - MARGIN_X, MARGIN_Y + 52,
           font=FONT_DISPLAY_XL, size=44, color=ORANGE, anchor="right")
+    # Cómo leer esta página — teoría en una línea
+    _text(c, "Lo que pesa a favor, lo que pesa en contra, y el recorrido del precio en el último año.",
+          MARGIN_X, MARGIN_Y + 76,
+          font=FONT_REG, size=14, color=TEXT_LO)
 
-    c.setStrokeColor(ORANGE)
+    c.setStrokeColor(_border_of(ORANGE))
     c.setLineWidth(1)
-    c.line(MARGIN_X, _y(MARGIN_Y + 82), PAGE_W - MARGIN_X, _y(MARGIN_Y + 82))
+    c.line(MARGIN_X, _y(MARGIN_Y + 88), PAGE_W - MARGIN_X, _y(MARGIN_Y + 88))
 
     # ── LAYOUT 2 COLUMNAS ───────────────────────────────────────────────
-    top_y = MARGIN_Y + 106
+    top_y = MARGIN_Y + 112
     avail_h = PAGE_H - top_y - MARGIN_Y - 30
     col_gap = 24
     col_w = (PAGE_W - 2 * MARGIN_X - col_gap) / 2
@@ -1863,68 +1984,55 @@ def _page_4_finale(c, a):
     # ════════ COLUMNA IZQUIERDA — FORTALEZAS + DEBILIDADES ═══════════════
     # Conclusiones simples en español generadas por código (no narran datos
     # ni dejan términos en inglés). Derivadas de los puntajes de cada dimensión.
+    #
+    # LAYOUT DINÁMICO: antes "DEBILIDADES" se pintaba a mitad fija de la
+    # columna y, con 4+ fortalezas, las tarjetas la PISABAN (solapamiento).
+    # Ahora la altura de tarjeta se calcula con el total de ítems de AMBAS
+    # secciones y cada bloque empieza exactamente donde terminó el anterior.
     left_x = MARGIN_X
     strengths, weaknesses = _auto_strengths_weaknesses(a)
 
-    # Sección FORTALEZAS
-    _text(c, "FORTALEZAS", left_x, top_y + 14,
-          font=FONT_DISPLAY_XL, size=28, color=GREEN)
-    _text(c, f"{len(strengths)} señales positivas detectadas",
-          left_x, top_y + 42,
-          font=FONT_REG, size=15, color=TEXT_LO)
+    header_h = 54          # título + subtítulo compactos de cada sección
+    section_gap = 26       # aire entre el fin de fortalezas y DEBILIDADES
+    card_gap_y = 12
+    n_s, n_w = len(strengths), len(weaknesses)
+    total_cards = max(n_s + n_w, 1)
+    gaps_h = card_gap_y * (max(n_s - 1, 0) + max(n_w - 1, 0))
+    usable_h = avail_h - 2 * header_h - section_gap - gaps_h
+    card_h = max(52.0, min(usable_h / total_cards, 84.0))
 
-    s_section_top = top_y + 62
-    section_h = avail_h / 2 - 30  # mitad superior de la columna
-    if strengths:
-        card_gap_y = 12
-        card_h = (section_h - card_gap_y * (len(strengths) - 1)) / max(len(strengths), 1)
-        card_h = min(card_h, 88)  # max razonable
-
-        for i, s in enumerate(strengths):
-            cy_top = s_section_top + i * (card_h + card_gap_y)
+    def _verdict_section(title, subtitle, items, col, icon, start_top):
+        """Dibuja header + tarjetas de una sección. Devuelve el top siguiente."""
+        _text(c, title, left_x, start_top + 20,
+              font=FONT_DISPLAY_XL, size=26, color=_num_of(col))
+        _text(c, subtitle, left_x, start_top + 44,
+              font=FONT_REG, size=14, color=TEXT_LO)
+        cy_top = start_top + header_h + 8
+        for it in items:
+            # Tarjeta premium: tinte sutil del color + borde apagado
             _box(c, left_x, cy_top, col_w, card_h, r=10,
-                 fill=BG_CARD, stroke=GREEN, stroke_w=1)
-            # Accent strip izquierdo
-            c.setFillColor(GREEN)
-            c.rect(left_x, _y(cy_top + card_h), 5, card_h, fill=1, stroke=0)
-            # Check mark
-            c.setFillColor(GREEN)
-            c.circle(left_x + 30, _y(cy_top + card_h/2), 9, fill=1, stroke=0)
-            _text(c, "✓", left_x + 30, cy_top + card_h/2 + 5,
-                  font=FONT_BOLD, size=13, color=HexColor("#0A0D11"),
-                  anchor="center")
-            # texto
-            _wrap(c, s, left_x + 64, cy_top + 28,
-                  width=col_w - 84, font=FONT_REG, size=16,
-                  color=TEXT_HI, line_height=1.35, max_lines=2)
+                 fill=_tint_of(col), stroke=_border_of(col), stroke_w=1)
+            # Acento lateral fino (el único toque a color pleno)
+            c.setFillColor(col)
+            c.rect(left_x, _y(cy_top + card_h), 4, card_h, fill=1, stroke=0)
+            # Icono en círculo tenue con símbolo a color (no disco chillón)
+            c.setFillColor(_mix(col, BG_CARD, 0.82))
+            c.circle(left_x + 32, _y(cy_top + card_h / 2), 11, fill=1, stroke=0)
+            _text(c, icon, left_x + 32, cy_top + card_h / 2 + 5,
+                  font=FONT_BOLD, size=13, color=_num_of(col), anchor="center")
+            # Texto centrado verticalmente (antes flotaba arriba)
+            _wrap_vcenter(c, it, left_x + 60, cy_top, card_h,
+                          width=col_w - 82, font=FONT_REG, size=15.5,
+                          color=TEXT_MD, line_height=1.3, max_lines=2)
+            cy_top += card_h + card_gap_y
+        return cy_top - card_gap_y  # fin real de la sección
 
-    # Sección DEBILIDADES
-    w_section_label_top = top_y + avail_h / 2 + 4
-    _text(c, "DEBILIDADES", left_x, w_section_label_top + 14,
-          font=FONT_DISPLAY_XL, size=28, color=RED)
-    _text(c, f"{len(weaknesses)} riesgos a vigilar",
-          left_x, w_section_label_top + 42,
-          font=FONT_REG, size=15, color=TEXT_LO)
-
-    w_section_top = w_section_label_top + 62
-    if weaknesses:
-        card_gap_y = 12
-        card_h = (section_h - card_gap_y * (len(weaknesses) - 1)) / max(len(weaknesses), 1)
-        card_h = min(card_h, 88)
-        for i, w in enumerate(weaknesses):
-            cy_top = w_section_top + i * (card_h + card_gap_y)
-            _box(c, left_x, cy_top, col_w, card_h, r=10,
-                 fill=BG_CARD, stroke=RED, stroke_w=1)
-            c.setFillColor(RED)
-            c.rect(left_x, _y(cy_top + card_h), 5, card_h, fill=1, stroke=0)
-            c.setFillColor(RED)
-            c.circle(left_x + 30, _y(cy_top + card_h/2), 9, fill=1, stroke=0)
-            _text(c, "!", left_x + 30, cy_top + card_h/2 + 5,
-                  font=FONT_BOLD, size=13, color=HexColor("#0A0D11"),
-                  anchor="center")
-            _wrap(c, w, left_x + 64, cy_top + 28,
-                  width=col_w - 84, font=FONT_REG, size=16,
-                  color=TEXT_HI, line_height=1.35, max_lines=2)
+    s_end = _verdict_section(
+        "FORTALEZAS", f"{n_s} señales positivas detectadas",
+        strengths, GREEN, "✓", top_y)
+    _verdict_section(
+        "DEBILIDADES", f"{n_w} riesgos a vigilar",
+        weaknesses, RED, "!", s_end + section_gap)
 
     # ════════ COLUMNA DERECHA — CHART PRECIOS + CTA BANNER ══════════════
     right_x = MARGIN_X + col_w + col_gap
