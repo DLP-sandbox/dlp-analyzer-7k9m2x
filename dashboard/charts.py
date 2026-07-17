@@ -32,6 +32,23 @@ HOVERLABEL = dict(
     font=dict(family="JetBrains Mono, monospace", size=11, color=TEXT),
 )
 
+
+# ── Escala de color CANÓNICA para puntajes 0-100 ──────────────────────────
+# Gradiente rojo → verde (la misma idea del breakdown del Overview): una mala
+# puntuación es roja y, subiendo, se convierte gradualmente en verde positivo.
+# ÚNICA fuente de verdad para colorear scores/barras/gauges en toda la app —
+# evita los tonos "pastel raros" y azules sueltos que se veían infantiles.
+def grad_score_color(s) -> str:
+    try:
+        s = float(s)
+    except Exception:
+        return MUTED
+    if s >= 80: return "#00FF88"   # verde brillante
+    if s >= 65: return "#4AFF88"   # verde-lima
+    if s >= 50: return "#FFB84D"   # oro
+    if s >= 35: return "#FF8B3D"   # naranja
+    return "#FF3B5C"               # rojo
+
 PLOTLY_LAYOUT = dict(
     paper_bgcolor=BG_MAIN,
     plot_bgcolor=BG_CARD,
@@ -369,17 +386,12 @@ def build_snowflake(snowflake: dict) -> go.Figure:
     values_closed = values + [values[0]]
     labels_closed = labels + [labels[0]]
 
-    # Color según score total
+    # Color según score total — escala graduada canónica (0-100).
     total = sum(values)
-    if total >= 70:
-        fill_color = "rgba(0,255,136,0.15)"
-        line_color = GREEN
-    elif total >= 50:
-        fill_color = "rgba(255,165,0,0.15)"
-        line_color = ORANGE
-    else:
-        fill_color = "rgba(255,59,92,0.15)"
-        line_color = RED
+    line_color = grad_score_color(total)
+    _h = line_color.lstrip("#")
+    _r, _g, _b = int(_h[0:2], 16), int(_h[2:4], 16), int(_h[4:6], 16)
+    fill_color = f"rgba({_r},{_g},{_b},0.15)"
 
     # Labels combinados: "🏆 Calidad · 19" — el valor queda al lado del label en el outer ring
     combined = [f"{labels[i]}  <b>{int(values[i])}</b>" for i in range(len(labels))]
@@ -467,14 +479,7 @@ def build_score_breakdown(score_breakdown: dict) -> go.Figure:
     names  = [agent_display[k] for k in order]
     scores = [float(score_breakdown.get(k, 50)) for k in order]
 
-    def color_for(s):
-        if s >= 80: return "#00FF88"
-        if s >= 65: return "#4AFF88"
-        if s >= 50: return "#FFB84D"
-        if s >= 35: return "#FF8B3D"
-        return "#FF3B5C"
-
-    bar_colors = [color_for(s) for s in scores]
+    bar_colors = [grad_score_color(s) for s in scores]
 
     fig = go.Figure()
 
@@ -559,14 +564,7 @@ def build_score_breakdown(score_breakdown: dict) -> go.Figure:
 
 def build_mini_gauge(score: float) -> go.Figure:
     """Gauge pequeño para el sidebar watchlist."""
-    if score >= 80:
-        color = GREEN
-    elif score >= 65:
-        color = BLUE
-    elif score >= 50:
-        color = ORANGE
-    else:
-        color = RED
+    color = grad_score_color(score)
 
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -637,7 +635,7 @@ def build_compact_gauge(value: float, label: str = "", color: str = None,
                          max_val: float = 100, height: int = 180, suffix: str = "") -> go.Figure:
     """Mini gauge para mostrar un valor 0-100 en un tab de agente."""
     if color is None:
-        color = GREEN if value >= 70 else ORANGE if value >= 50 else RED
+        color = grad_score_color(value)
 
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -797,15 +795,15 @@ def build_earnings_history_chart(history: list, height: int = 250) -> go.Figure:
 def build_sentiment_gauge(score: float, height: int = 240) -> go.Figure:
     """Gauge especializado para sentimiento con etiquetas (Bearish → Bullish)."""
     if score >= 75:
-        color, label = GREEN, "MUY BULLISH"
+        color, label = GREEN, "MUY ALCISTA"
     elif score >= 55:
-        color, label = "#4AFF88", "BULLISH"
+        color, label = "#4AFF88", "ALCISTA"
     elif score >= 45:
         color, label = BLUE, "NEUTRAL"
     elif score >= 30:
-        color, label = ORANGE, "BEARISH"
+        color, label = ORANGE, "BAJISTA"
     else:
-        color, label = RED, "MUY BEARISH"
+        color, label = RED, "MUY BAJISTA"
 
     fig = go.Figure(go.Indicator(
         mode="gauge",

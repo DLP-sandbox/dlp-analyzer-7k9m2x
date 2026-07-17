@@ -3251,10 +3251,21 @@ def get_recommendation_badge(recommendation: str) -> str:
 
 
 def score_color(score: float) -> str:
-    if score >= 70:
+    # Escala graduada roja → verde (misma idea del breakdown del Overview):
+    # una mala puntuación es roja y sube gradualmente a verde positivo.
+    # Unificada en toda la app para no ver tonos pastel/azules sueltos.
+    try:
+        s = float(score)
+    except Exception:
+        return "#7A8898"
+    if s >= 80:
         return "#00FF88"
-    if score >= 50:
+    if s >= 65:
+        return "#4AFF88"
+    if s >= 50:
         return "#FFB84D"
+    if s >= 35:
+        return "#FF8B3D"
     return "#FF3B5C"
 
 

@@ -904,13 +904,24 @@ def run_market_scan(filters: Optional[dict] = None):
 
 # ── Helpers reutilizables para tabs de agentes ───────────────────────────
 
+def _conviction_es(v) -> str:
+    """Traduce el nivel de convicción a español. 'Convicción' es femenino →
+    ALTA / MEDIA / BAJA (no ALTO). Si ya viene en español o es desconocido,
+    lo devuelve tal cual en mayúsculas."""
+    m = {"HIGH": "ALTA", "MEDIUM": "MEDIA", "LOW": "BAJA",
+         "ALTA": "ALTA", "MEDIA": "MEDIA", "BAJA": "BAJA"}
+    s = str(v or "").strip().upper()
+    return m.get(s, s or "—")
+
+
 def _render_agent_header(report):
     """Header strip con icono, nombre del agente, score y conviction badge."""
     score = report.score
     color = score_color(score)
     icon = AGENT_ICONS.get(report.agent_name, "📊")
     conv_colors = {"HIGH": "#00FF88", "MEDIUM": "#FFB84D", "LOW": "#FF3B5C"}
-    conv_color = conv_colors.get(report.conviction, "#FFB84D")
+    conv_color = conv_colors.get((report.conviction or "").upper(), "#FFB84D")
+    conv_es = _conviction_es(report.conviction)
     st.markdown(f"""
     <div class="agent-header">
         <div class="agent-header-left">
@@ -920,7 +931,7 @@ def _render_agent_header(report):
         <div class="agent-header-right">
             <span class="agent-score" style="color:{color};">{score:.0f}<span class="agent-score-max">/100</span></span>
             <span class="conviction-badge" style="color:{conv_color};border-color:{conv_color}40;background:{conv_color}1A;">
-                {report.conviction}
+                CONVICCIÓN {conv_es}
             </span>
         </div>
     </div>
@@ -1336,13 +1347,13 @@ def render_overview(analysis: StockAnalysis):
             unsafe_allow_html=True,
         )
 
-        # Conviction
+        # Convicción (en español)
         conviction_color = {"HIGH": "#00FF88", "MEDIUM": "#FFA500", "LOW": "#FF3B5C"}.get(
-            analysis.conviction_level, "#FFA500"
+            (analysis.conviction_level or "").upper(), "#FFA500"
         )
         st.markdown(
             f'<div style="text-align:center;font-family:JetBrains Mono;font-size:0.75rem;color:{conviction_color};margin-top:4px;">'
-            f'Conviction: {analysis.conviction_level}</div>',
+            f'Convicción: {_conviction_es(analysis.conviction_level)}</div>',
             unsafe_allow_html=True,
         )
 
@@ -1807,14 +1818,16 @@ def render_fundamentals(analysis: StockAnalysis):
 
     sub_items = []
     pillars = [
-        ("Calidad",          sub.get("quality"),           "#FFB84D"),
-        ("Crecimiento",      sub.get("growth"),            "#00FF88"),
-        ("Valoración",       sub.get("valuation"),         "#4A9EFF"),
-        ("Solidez Financiera", sub.get("financial_health"), "#9B59FF"),
+        ("Calidad",            sub.get("quality")),
+        ("Crecimiento",        sub.get("growth")),
+        ("Valoración",         sub.get("valuation")),
+        ("Solidez Financiera", sub.get("financial_health")),
     ]
-    for label, val, color in pillars:
+    for label, val in pillars:
         if val is not None:
-            sub_items.append((label, float(val) * 4, color))  # escalar /25 → /100
+            scaled = float(val) * 4  # escalar /25 → /100
+            # Color por PUNTAJE (escala graduada rojo→verde), no fijo por categoría.
+            sub_items.append((label, scaled, score_color(scaled)))
 
     if sub_items:
         fig = build_metric_bars(sub_items, height=240,
@@ -1890,14 +1903,16 @@ def render_future(analysis: StockAnalysis):
 
     sub_items = []
     pillars = [
-        ("Calidad del Moat",     sub.get("moat_quality"),                 "#FFB84D"),
-        ("Runway de Crecimiento", sub.get("growth_runway"),               "#00FF88"),
-        ("Resistencia Disrupción", sub.get("disruption_resilience"),      "#4A9EFF"),
-        ("Capital Allocation",   sub.get("management_capital_allocation"), "#9B59FF"),
+        ("Calidad del Moat",       sub.get("moat_quality")),
+        ("Runway de Crecimiento",  sub.get("growth_runway")),
+        ("Resistencia Disrupción", sub.get("disruption_resilience")),
+        ("Capital Allocation",     sub.get("management_capital_allocation")),
     ]
-    for label, val, color in pillars:
+    for label, val in pillars:
         if val is not None:
-            sub_items.append((label, float(val) * 4, color))
+            scaled = float(val) * 4
+            # Color por PUNTAJE (escala graduada rojo→verde), no fijo por categoría.
+            sub_items.append((label, scaled, score_color(scaled)))
 
     if sub_items:
         fig = build_metric_bars(sub_items, height=240,
@@ -2433,7 +2448,7 @@ def render_agent_tab(analysis: StockAnalysis, agent_key: str):
             f'<div style="text-align:center;padding:16px;background:#0F1419;border:1px solid #1E2530;border-radius:8px;border-top:3px solid {color};">'
             f'<div style="font-family:JetBrains Mono;font-size:3rem;font-weight:700;color:{color};">{score:.0f}</div>'
             f'<div style="font-size:0.7rem;color:#7A8898;text-transform:uppercase;letter-spacing:0.1em;">Score / 100</div>'
-            f'<div style="font-size:0.75rem;color:{color};margin-top:4px;">{report.conviction}</div>'
+            f'<div style="font-size:0.75rem;color:{color};margin-top:4px;">CONVICCIÓN {_conviction_es(report.conviction)}</div>'
             f'</div>',
             unsafe_allow_html=True,
         )
