@@ -238,7 +238,22 @@ def get_company_info(ticker: str) -> dict:
         if result.get("name") == ticker and tv.get("name"):
             result["name"] = tv["name"]
 
-    _save_cache(key, result)
+    # Anti-envenenamiento de caché: solo persistimos si la descarga trajo datos
+    # reales. Antes se cacheaba SIEMPRE, así que un rate-limit transitorio de
+    # yfinance (info vacío) congelaba un resultado vacío por TTL_COMPANY_INFO
+    # horas → Smart Money/Fundamentales en blanco en CADA re-análisis hasta que
+    # expiraba. Si falló del todo, NO cacheamos: el próximo intento reintenta
+    # fresco y se auto-sana. Chequeamos el RESULTADO (no `bool(info)`: yfinance
+    # devuelve un dict truthy incluso para tickers inválidos/rate-limiteados).
+    _has_real_data = bool(
+        result.get("market_cap")
+        or result.get("current_price")
+        or result.get("pe_ratio")
+        or result.get("held_pct_institutions")
+        or (result.get("sector") and result.get("sector") != "Unknown")
+    )
+    if _has_real_data:
+        _save_cache(key, result)
 
     # Sobrescribir con precio en vivo si está disponible (más fresco)
     live = get_live_price(ticker)
@@ -777,7 +792,14 @@ def get_holders_data(ticker: str, info: dict = None) -> dict:
             if hi:
                 result["insider_ownership_pct"] = float(hi) * 100
 
-    _save_cache(key, result)
+    # Anti-envenenamiento: solo cacheamos si conseguimos algo útil (la tabla
+    # institucional, el % de propiedad, o transacciones de insiders). Cachear
+    # un dict vacío tras un rate-limit congelaba Smart Money en blanco por
+    # TTL_HOLDERS horas. Si no hay nada, no cacheamos → el próximo intento
+    # reintenta y se auto-sana.
+    if (result.get("top_institutions") or result.get("institutional_ownership_pct")
+            or result.get("insider_transactions") or result.get("major_holders_raw")):
+        _save_cache(key, result)
     return result
 
 
@@ -1098,5 +1120,10 @@ def get_earnings_data(ticker: str) -> dict:
         if tv_fallback.get("next_earnings"):
             result.update(tv_fallback)
 
-    _save_cache(key, result)
+    # Anti-envenenamiento: solo cacheamos si conseguimos la fecha del próximo
+    # reporte o el historial. Antes se cacheaba el dict vacío tras un doble
+    # rate-limit (yfinance + TV), dejando Catalizadores en blanco por
+    # TTL_EARNINGS horas. Sin datos → no cacheamos → se reintenta después.
+    if result.get("next_earnings") or result.get("earnings_history"):
+        _save_cache(key, result)
     return result
