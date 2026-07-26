@@ -1151,11 +1151,27 @@ def get_holders_data(ticker: str, info: dict = None) -> dict:
     stock = yf.Ticker(ticker)
     result = {}
 
+    # Suma del % de los top-10 institucionales. OJO: yfinance NO expone una
+    # columna "% Out" (eso era una suposición): la tabla real trae `pctHeld` como
+    # FRACCIÓN (0.0807 = 8.07%). Por eso este dato salía siempre None y el agente
+    # recibía "Total Institutional Ownership: N/A" → la IA rellenaba con texto
+    # inventado ("~21% (top 8 holders)", "N/A (datos limitados)"), que es el
+    # número raro que se veía en Smart Money. Se acepta cualquiera de las dos
+    # columnas y se normaliza a porcentaje.
+    top10_pct_sum = None
     try:
         inst = stock.institutional_holders
         if inst is not None and not inst.empty:
             result["top_institutions"] = inst.head(10).to_dict(orient="records")
-            result["institutional_ownership_pct"] = float(inst["% Out"].sum()) if "% Out" in inst.columns else None
+            for _col, _scale in (("% Out", 1.0), ("pctHeld", 100.0)):
+                if _col in inst.columns:
+                    try:
+                        _s = float(pd.to_numeric(inst[_col], errors="coerce").fillna(0).sum()) * _scale
+                        if _s > 0:
+                            top10_pct_sum = _s
+                            break
+                    except Exception:
+                        pass
     except Exception:
         pass
 
@@ -1176,18 +1192,28 @@ def get_holders_data(ticker: str, info: dict = None) -> dict:
     except Exception:
         pass
 
-    # ── RESPALDO: si la tabla institucional falló (rate-limit cloud), usar
-    # el % de propiedad del .info para no dejar la sección vacía. ──
+    # ── % de propiedad institucional, por orden de fiabilidad ──────────────
+    # 1º `held_pct_institutions` del .info: es el TOTAL institucional (AAPL ~62%)
+    #    y es el número que la UI quiere mostrar.
+    # 2º Suma de los top-10: sólo una COTA INFERIOR (AAPL ~31%), pero mucho mejor
+    #    que dejarlo vacío y que la IA se lo invente. Se marca el origen para
+    #    poder distinguirlo.
     if info:
-        if result.get("institutional_ownership_pct") in (None, 0):
-            hp = info.get("held_pct_institutions")
-            if hp:
-                result["institutional_ownership_pct"] = float(hp) * 100
-                result["institutional_ownership_source"] = "info_fallback"
+        hp = info.get("held_pct_institutions")
+        if result.get("institutional_ownership_pct") in (None, 0) and hp:
+            result["institutional_ownership_pct"] = float(hp) * 100
+            result["institutional_ownership_source"] = "info_total"
         if result.get("insider_ownership_pct") in (None, 0):
             hi = info.get("held_pct_insiders")
             if hi:
                 result["insider_ownership_pct"] = float(hi) * 100
+
+    if result.get("institutional_ownership_pct") in (None, 0) and top10_pct_sum:
+        result["institutional_ownership_pct"] = top10_pct_sum
+        result["institutional_ownership_source"] = "top10_sum"
+
+    if top10_pct_sum:
+        result["top10_institutional_pct"] = top10_pct_sum
 
     # Anti-envenenamiento: solo cacheamos si conseguimos algo útil (la tabla
     # institucional, el % de propiedad, o transacciones de insiders). Cachear

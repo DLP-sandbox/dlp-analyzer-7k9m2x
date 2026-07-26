@@ -2112,33 +2112,42 @@ def render_institutional(analysis: StockAnalysis):
     insider_level = "good" if "bullish" in insider_raw.lower() else "bad" if "bearish" in insider_raw.lower() else "neutral"
     squeeze_level = "good" if "high" in squeeze_raw.lower() else "neutral" if "medium" in squeeze_raw.lower() else "warn"
 
-    # Valores con FALLBACK a datos vivos (rescata NKE/small-caps y análisis
-    # viejos guardados vacíos, cuando institutional_holders se rate-limiteó).
-    # Todo cacheado y protegido: nunca crashea, y solo rellena lo que falta.
-    inst_pct = _extract_percent(inst_raw)
-    short_pct = _extract_percent(short_raw)
-    top_inst = holders_raw.get("top_institutions") or []
-    if inst_pct == "—" or short_pct == "—" or not top_inst:
-        try:
-            _info = _cached_company_info(analysis.ticker) or {}
-        except Exception:
-            _info = {}
-        try:
-            _hold = _cached_holders(analysis.ticker, _info) or {}
-        except Exception:
-            _hold = {}
-        if inst_pct == "—":
-            _v = _hold.get("institutional_ownership_pct")
-            if not _v and _info.get("held_pct_institutions"):
-                _v = float(_info["held_pct_institutions"]) * 100
-            if _v:
-                inst_pct = f"{float(_v):.1f}%"
-        if short_pct == "—":
-            _sp = _info.get("short_percent")
-            if _sp:
-                short_pct = f"{float(_sp) * 100:.1f}%"
-        if not top_inst:
-            top_inst = _hold.get("top_institutions") or []
+    # ── % institucional y short: el DATO VIVO manda sobre el texto de la IA ──
+    # Cuando el agente no recibía el % (bug de la columna `% Out`, que yfinance no
+    # tiene), la IA rellenaba el campo con texto inventado: "~21% (top 8 holders)",
+    # "N/A (datos limitados)", "<No especificado>". De ahí venía el número raro.
+    # Ahora se consulta SIEMPRE la fuente autoritativa (Yahoo) y sólo se usa el
+    # texto del modelo si no hay dato vivo. Esto además sana los análisis YA
+    # GUARDADOS al abrirlos, sin re-ejecutarlos ni mutar lo almacenado.
+    # Todo cacheado y protegido: nunca crashea.
+    try:
+        _info = _cached_company_info(analysis.ticker) or {}
+    except Exception:
+        _info = {}
+    try:
+        _hold = _cached_holders(analysis.ticker, _info) or {}
+    except Exception:
+        _hold = {}
+
+    inst_pct = "—"
+    _v = _hold.get("institutional_ownership_pct")
+    if not _v and _info.get("held_pct_institutions"):
+        _v = _safe_num(_info.get("held_pct_institutions"))
+        _v = _v * 100 if _v is not None else None
+    _v = _safe_num(_v)
+    if _v:
+        inst_pct = f"{_v:.1f}%"
+    else:
+        inst_pct = _extract_percent(inst_raw)      # último recurso: texto del modelo
+
+    short_pct = "—"
+    _sp = _safe_num(_info.get("short_percent"))
+    if _sp:
+        short_pct = f"{_sp * 100:.1f}%"
+    else:
+        short_pct = _extract_percent(short_raw)
+
+    top_inst = holders_raw.get("top_institutions") or _hold.get("top_institutions") or []
 
     _render_status_pills([
         {"label": "Propiedad Institucional",
