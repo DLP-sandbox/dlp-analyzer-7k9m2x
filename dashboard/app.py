@@ -71,9 +71,13 @@ st.markdown(BLOOMBERG_CSS, unsafe_allow_html=True)
 # Con un tope, el caché sigue acelerando pero nunca crece sin control.
 @st.cache_data(ttl=900, show_spinner=False, max_entries=24)
 def _hist_and_indicators(ticker: str, period: str = "2y"):
-    from data.market_data import get_price_history, compute_technical_indicators
+    # get_technical_indicators (no compute_technical_indicators directo) para que
+    # los indicadores tengan la cadena de respaldo completa: OHLCV (yfinance →
+    # Nasdaq) y, si en cloud ambos están bloqueados o el df viene lleno de NaN,
+    # snapshot de TradingView. Así Stage/RSI/52W/ATR nunca salen "nan".
+    from data.market_data import get_price_history, get_technical_indicators
     df = get_price_history(ticker, period=period)
-    ind = compute_technical_indicators(df) if df is not None and not df.empty else {}
+    ind = get_technical_indicators(ticker, df)
     return df, ind
 
 
@@ -140,6 +144,34 @@ def _cached_breakdown_fig(score_breakdown: dict):
 @st.cache_data(show_spinner=False, max_entries=128)
 def _cached_rr_fig(current_price: float, stop: float, target: float, ticker: str):
     return build_rr_chart(current_price, stop, target, ticker)
+
+
+@st.cache_data(ttl=900, show_spinner=False, max_entries=48)
+def _cached_risk_levels(ticker: str) -> dict:
+    """Niveles de riesgo calculados en vivo (OHLCV → TradingView). Respaldo para
+    análisis guardados que no traen stop/target, o cuando vinieron NaN."""
+    from data.market_data import get_risk_levels
+    return get_risk_levels(ticker) or {}
+
+
+def _rr_levels(analysis) -> tuple:
+    """(precio_actual, stop, target) para la gráfica Upside/Downside.
+
+    Usa lo que trae el análisis y, si falta o es NaN (típico cuando el análisis se
+    generó en cloud con Yahoo bloqueado), cae a get_risk_levels() — que siempre
+    consigue números reales vía OHLCV o TradingView. Devuelve (None,None,None) si
+    ni así hay datos, y la gráfica simplemente se omite."""
+    stop   = _safe_num(getattr(analysis, "stop_loss", None))
+    target = _safe_num(getattr(analysis, "target_price", None))
+    info_live = _cached_company_info(analysis.ticker) or {}
+    price = _safe_num(info_live.get("current_price")) or _safe_num(getattr(analysis, "entry_price", None))
+
+    if not (price and stop and target):
+        rl = _cached_risk_levels(analysis.ticker)
+        price  = price  or _safe_num(rl.get("current_price"))
+        stop   = stop   or _safe_num(rl.get("stop"))
+        target = target or _safe_num(rl.get("target"))
+    return price, stop, target
 
 
 # ── State inicial ─────────────────────────────────────────────────────────
@@ -1074,14 +1106,23 @@ def _render_insight_card(title, content, color="#E2B25C", icon="💡"):
 
 
 def _safe_num(value, default=None):
-    """Convierte a float si es posible, retorna default si no."""
+    """Convierte a float si es posible, retorna default si no.
+
+    Descarta NaN e infinitos: `float("nan")` pasaba el try/except y se pintaba
+    literalmente "nan%" en los tiles. Ojo con el patrón `_safe_num(x) or 0`:
+    NaN es *truthy*, así que sin este filtro el `or 0` NO lo rescataba."""
     try:
         if value is None or value == "" or value == "N/A":
             return default
         if isinstance(value, str):
             cleaned = value.replace("$", "").replace(",", "").replace("%", "").strip()
-            return float(cleaned)
-        return float(value)
+            v = float(cleaned)
+        else:
+            v = float(value)
+        # NaN != NaN; y descartamos ±inf (no son representables en la UI).
+        if v != v or v in (float("inf"), float("-inf")):
+            return default
+        return v
     except Exception:
         return default
 
@@ -1580,16 +1621,14 @@ def render_overview(analysis: StockAnalysis):
             </div>
             """, unsafe_allow_html=True)
 
-    # Risk/Reward visual — usando PRECIO ACTUAL de yfinance como referencia
-    if analysis.stop_loss and analysis.target_price:
-        info_live = _cached_company_info(analysis.ticker) or {}
-        current_price = info_live.get("current_price") or analysis.entry_price
-        if current_price:
-            st.markdown("---")
-            fig = _cached_rr_fig(current_price, analysis.stop_loss,
-                                 analysis.target_price, analysis.ticker)
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                            key=f"chart_overview_rr_{analysis.ticker}")
+    # Risk/Reward visual — precio actual en vivo, con respaldo de get_risk_levels
+    # cuando el análisis guardado no trae stop/target (o vinieron NaN en cloud).
+    current_price, _stop, _target = _rr_levels(analysis)
+    if current_price and _stop and _target:
+        st.markdown("---")
+        fig = _cached_rr_fig(current_price, _stop, _target, analysis.ticker)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+                        key=f"chart_overview_rr_{analysis.ticker}")
 
 
 # ── Technical Tab ─────────────────────────────────────────────────────────
@@ -2519,17 +2558,14 @@ def render_risk(analysis: StockAnalysis):
          "tooltip": "Average True Range como % del precio. >5% indica activo muy volátil con drawdowns frecuentes."},
     ])
 
-    # ── R/R Chart visual — usando PRECIO ACTUAL como referencia ──
-    if analysis.stop_loss and analysis.target_price:
-        info_live = _cached_company_info(analysis.ticker) or {}
-        current_price = info_live.get("current_price") or analysis.entry_price
-        if current_price:
-            st.markdown('<div class="section-title-bar">Upside / Downside vs Precio Actual</div>',
-                        unsafe_allow_html=True)
-            fig = _cached_rr_fig(current_price, analysis.stop_loss,
-                                 analysis.target_price, analysis.ticker)
-            st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                            key=f"chart_risk_tab_rr_{analysis.ticker}")
+    # ── R/R Chart visual — precio actual + respaldo de get_risk_levels ──
+    current_price, _stop, _target = _rr_levels(analysis)
+    if current_price and _stop and _target:
+        st.markdown('<div class="section-title-bar">Upside / Downside vs Precio Actual</div>',
+                    unsafe_allow_html=True)
+        fig = _cached_rr_fig(current_price, _stop, _target, analysis.ticker)
+        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
+                        key=f"chart_risk_tab_rr_{analysis.ticker}")
 
     # ── Pros / Cons ──
     _render_pros_cons(report,

@@ -1078,8 +1078,17 @@ def build_quick_chart(df: pd.DataFrame, ticker: str, period_days: int = 126) -> 
 
 def build_rr_chart(current_price: float, stop: float, target: float, ticker: str) -> go.Figure:
     """Visualización del Upside/Downside calculado desde el PRECIO ACTUAL hasta target/stop."""
-    if not all([current_price, stop, target]):
+    # `not all([...])` NO detecta NaN (NaN es truthy) → se colaba y la gráfica
+    # salía con ejes "nan". Exigimos números REALES y positivos en los tres.
+    def _ok(x):
+        try:
+            v = float(x)
+            return v == v and v not in (float("inf"), float("-inf")) and v > 0
+        except (TypeError, ValueError):
+            return False
+    if not (_ok(current_price) and _ok(stop) and _ok(target)):
         return go.Figure()
+    current_price, stop, target = float(current_price), float(stop), float(target)
 
     downside_pct = (current_price - stop) / current_price * 100
     upside_pct   = (target - current_price) / current_price * 100

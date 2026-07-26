@@ -3,6 +3,8 @@ Capa unificada de datos de mercado. Usa yfinance como fuente primaria
 con caché local en JSON para minimizar llamadas a la API.
 """
 import json
+import os
+import re
 import time
 import warnings
 from datetime import datetime, timedelta
@@ -66,38 +68,371 @@ def _save_cache(key: str, data: dict) -> None:
 
 # ── Datos de precio ───────────────────────────────────────────────────────
 
+def _nasdaq_num(s):
+    """Convierte '1,234.5', '$1,234', '8.94%' → float. None si no se puede."""
+    if s is None:
+        return None
+    try:
+        cleaned = re.sub(r"[,$%\s]", "", str(s))
+        if cleaned in ("", "-", "N/A"):
+            return None
+        v = float(cleaned)
+        return v if v == v else None  # NaN check
+    except (TypeError, ValueError):
+        return None
+
+
+def _nasdaq_json(path: str) -> Optional[dict]:
+    """GET a la API pública de Nasdaq (api.nasdaq.com). Nasdaq cubre TODAS las
+    acciones de NASDAQ y NYSE y no rate-limita las IPs de datacenter como sí
+    hace Yahoo. Devuelve el dict 'data' de la respuesta, o None. NUNCA lanza."""
+    url = f"https://api.nasdaq.com{path}"
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "en-US,en;q=0.9",
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0 Safari/537.36",
+        "Origin": "https://www.nasdaq.com",
+        "Referer": "https://www.nasdaq.com/",
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        if resp.status_code != 200:
+            return None
+        payload = resp.json()
+        return payload.get("data") if isinstance(payload, dict) else None
+    except Exception:
+        return None
+
+
 def get_price_history(ticker: str, period: str = "2y", interval: str = "1d") -> pd.DataFrame:
-    """OHLCV diario o semanal para análisis técnico."""
+    """OHLCV diario o semanal para análisis técnico.
+
+    Fuente primaria: yfinance. RESPALDO EN LA NUBE: si yfinance viene vacío
+    (Yahoo bloquea/limita las IPs de datacenter en Render/Cloud → DataFrame
+    vacío → de ahí venían los "nan" en target, Stage, 52W, RS, ATR en
+    producción), se cae a Nasdaq, que SÍ responde OHLCV real en esas IPs. Así
+    el análisis técnico y de riesgo funciona igual en localhost y producción."""
     key = f"price_{ticker}_{period}_{interval}"
     cached = _load_cache(key, ttl_hours=TTL_PRICE_DAILY)
     if cached:
-        df = pd.DataFrame(cached)
-        df.index = pd.to_datetime(df.index)
-        return df
+        try:
+            df = pd.DataFrame(cached)
+            if not df.empty:
+                # utc=True + tz_localize(None) tolera cachés VIEJOS con offsets
+                # mixtos (-04:00/-05:00) y devuelve SIEMPRE un índice tz-naïve
+                # uniforme (si no, el .intersection del RS con otro df tz-naïve
+                # daba vacío → RS en blanco, y la gráfica petaba con
+                # "Tz-aware datetime.datetime ... unless utc=True").
+                idx = pd.to_datetime(df.index, utc=True, errors="coerce")
+                df.index = idx.tz_localize(None)
+                df = df[df.index.notna()]
+                if not df.empty:
+                    return df
+        except Exception:
+            pass
 
-    # yfinance puede lanzar (rate-limit/red, muy común en cloud). Antes esto
-    # NO estaba protegido y una excepción aquí crasheaba el render entero de
-    # Streamlit ("error running app" aleatorio). Ahora nunca propagamos: si
-    # falla, devolvemos DataFrame vacío y todo el código aguas abajo ya maneja
-    # df.empty sin romperse (misma defensa que get_company_info/get_holders_data).
-    try:
-        stock = yf.Ticker(ticker)
-        df = stock.history(period=period, interval=interval, auto_adjust=True)
-    except Exception:
+    df = pd.DataFrame()
+    # Interruptor de PRUEBA: DLP_FORCE_TRADINGVIEW=1 simula producción (Yahoo y
+    # Nasdaq bloqueados) → fuerza el respaldo de TradingView. Útil para verificar
+    # en localhost que los datos llegan igual que en Render. Sin la variable, todo
+    # funciona normal (yfinance → Nasdaq → TradingView).
+    if not os.environ.get("DLP_FORCE_TRADINGVIEW"):
+        # yfinance puede lanzar (rate-limit/red, muy común en cloud). Nunca
+        # propagamos: el código aguas abajo ya maneja df vacío sin romperse.
+        try:
+            df = yf.Ticker(ticker).history(period=period, interval=interval, auto_adjust=True)
+        except Exception:
+            df = pd.DataFrame()
+
+        # Respaldo Nasdaq cuando yfinance no trae nada (típico en cloud).
+        if df is None or df.empty:
+            df = _get_price_history_from_nasdaq(ticker, period, interval)
+
+    # Sin OHLCV (ni yfinance ni Nasdaq, o el toggle de prueba): devolvemos vacío
+    # a propósito → get_technical_indicators / get_risk_levels / RS caen a
+    # TradingView, que SÍ responde en cloud. La gráfica de velas se salta (no hay
+    # histórico puntual en TV), pero todos los NÚMEROS quedan reales.
+    if df is None or df.empty:
         return pd.DataFrame()
 
-    if df is None or df.empty:
-        return pd.DataFrame() if df is None else df
-
+    # Índice tz-NAÏVE SIEMPRE: el índice de yfinance es tz-aware (America/New_York,
+    # con offsets mixtos -04:00/-05:00 por el horario de verano). Guardado como
+    # texto y releído, pd.to_datetime falla con esos offsets mixtos y ROMPE la
+    # gráfica. Lo volvemos naïve antes de cachear y también en el objeto que
+    # devolvemos, para que sea uniforme y estable.
     try:
-        _save_cache(key, df.to_dict())
+        if getattr(df.index, "tz", None) is not None:
+            df.index = df.index.tz_localize(None)
+    except (TypeError, AttributeError):
+        pass
+
+    # Cachear con índice en texto (json.dumps no serializa claves Timestamp) —
+    # así el caché REALMENTE persiste y la próxima lectura es instantánea.
+    try:
+        df_cache = df.copy()
+        df_cache.index = df_cache.index.astype(str)
+        _save_cache(key, df_cache.to_dict())
     except Exception:
         pass
     return df
 
 
+def _get_price_history_from_nasdaq(ticker: str, period: str = "2y", interval: str = "1d") -> pd.DataFrame:
+    """OHLCV histórico desde la API pública de Nasdaq (funciona en IPs de
+    datacenter, a diferencia de yfinance). Devuelve un DataFrame con el MISMO
+    formato que yfinance (columnas Open/High/Low/Close/Volume, índice de fechas
+    ascendente). Vacío si falla. NUNCA lanza."""
+    days = {"1mo": 40, "3mo": 100, "6mo": 190, "1y": 370, "2y": 740, "3y": 1100, "5y": 1850}.get(period, 740)
+    frm = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    to = datetime.now().strftime("%Y-%m-%d")
+
+    # La API de Nasdaq cubre NYSE **y** NASDAQ. Para acciones de CLASE (BRK-B,
+    # BF-B) usa el PUNTO, no el guion que usa yfinance internamente → probamos
+    # el ticker tal cual y también su variante con punto. assetclass: stocks y,
+    # como respaldo, etf (para SPY, benchmark del RS).
+    variants = [ticker.upper()]
+    if "-" in ticker:
+        variants.append(ticker.upper().replace("-", "."))
+
+    def _fetch(tk: str, asset_class: str):
+        return _nasdaq_json(
+            f"/api/quote/{tk}/historical?assetclass={asset_class}"
+            f"&fromdate={frm}&todate={to}&limit=9999"
+        )
+
+    try:
+        rows = []
+        for tk in variants:
+            for ac in ("stocks", "etf"):
+                data = _fetch(tk, ac)
+                rows = (((data or {}).get("tradesTable") or {}).get("rows") or []) if data else []
+                if rows:
+                    break
+            if rows:
+                break
+        recs = []
+        for r in rows:
+            try:
+                d = pd.to_datetime(r.get("date"), format="%m/%d/%Y", errors="coerce")
+                c = _nasdaq_num(r.get("close"))
+                if d is None or pd.isna(d) or c is None:
+                    continue
+                recs.append({
+                    "Date":   d,
+                    "Open":   _nasdaq_num(r.get("open"))  or c,
+                    "High":   _nasdaq_num(r.get("high"))  or c,
+                    "Low":    _nasdaq_num(r.get("low"))   or c,
+                    "Close":  c,
+                    "Volume": _nasdaq_num(r.get("volume")) or 0.0,
+                })
+            except Exception:
+                continue
+        if not recs:
+            return pd.DataFrame()
+        df = pd.DataFrame(recs).set_index("Date").sort_index()
+        df = df[~df.index.duplicated(keep="last")]
+        if interval == "1wk":
+            df = df.resample("W").agg({"Open": "first", "High": "max", "Low": "min",
+                                       "Close": "last", "Volume": "sum"}).dropna(subset=["Close"])
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+
 def get_weekly_history(ticker: str, period: str = "3y") -> pd.DataFrame:
     return get_price_history(ticker, period=period, interval="1wk")
+
+
+# ── Snapshot técnico vía TradingView (fuente INFALIBLE en cloud) ───────────
+# TradingView (tradingview-screener) es la MISMA fuente del escáner, que ya
+# funciona en cloud sin rate limit. Yahoo la puede bloquear pero TradingView NO.
+# Da valores puntuales (no OHLCV histórico), suficientes para reconstruir TODOS
+# los indicadores que la UI y el riesgo necesitan.
+_TV_TECH_FIELDS = [
+    "close", "SMA20", "SMA50", "SMA100", "SMA200", "RSI", "ATR",
+    "price_52_week_high", "price_52_week_low",
+    "Perf.1M", "Perf.3M", "Perf.6M", "Perf.Y",
+    "MACD.macd", "MACD.signal", "Low.3M", "High.3M",
+    # Target de analistas (el MISMO campo que usa get_company_info): da un precio
+    # objetivo REAL sin depender de OHLCV.
+    "price_target_average",
+]
+
+
+def _tv_row(ticker: str) -> dict:
+    """Una fila de TradingView con campos técnicos para `ticker` (o {}).
+    Prueba el ticker tal cual y su variante con punto (clases: BRK-B→BRK.B)."""
+    variants = [ticker.upper()]
+    if "-" in ticker:
+        variants.append(ticker.upper().replace("-", "."))
+    for tk in variants:
+        try:
+            from tradingview_screener import Query, col
+            _, df = (Query().select(*_TV_TECH_FIELDS)
+                     .where(col("name") == tk).limit(1).get_scanner_data())
+            if df is not None and not df.empty:
+                return df.iloc[0].to_dict()
+        except Exception:
+            continue
+    return {}
+
+
+def _sp500_benchmark_perf() -> dict:
+    """Perf REAL del S&P 500 para el respaldo del Relative Strength en cloud,
+    calculado desde el histórico de SPY de Nasdaq (api.nasdaq.com responde en IPs
+    de datacenter). Se usa como benchmark cuando el OHLCV de yfinance viene vacío
+    o corrupto en cloud.
+
+    ¿Por qué no TradingView? El escáner de ACCIONES de TradingView no incluye
+    ETFs ni índices (SPY/SPX/US500/VOO salen vacíos), y el promedio de mega-caps
+    sobreestima el retorno (~38% vs ~17.5% real) → distorsionaría el RS. El SPY de
+    Nasdaq da el número REAL.
+
+    Devuelve {"Perf.1M","Perf.3M","Perf.6M","Perf.Y"} en % (mismas claves que
+    _tv_row, intercambiable como `benchmark`) o {} si falla. Cachea (mismo para
+    todos los tickers). NUNCA lanza."""
+    cached = _load_cache("sp500_benchmark_perf", ttl_hours=TTL_RS)
+    if cached:
+        return cached
+    try:
+        spy = _get_price_history_from_nasdaq("SPY", "1y", "1d")
+        if spy is not None and not spy.empty and "Close" in spy.columns:
+            c = pd.to_numeric(spy["Close"], errors="coerce").dropna()
+            if len(c) > 30:
+                out = {}
+                for n, k in [(21, "Perf.1M"), (63, "Perf.3M"), (126, "Perf.6M"), (252, "Perf.Y")]:
+                    if len(c) > n:
+                        out[k] = float((c.iloc[-1] / c.iloc[-n] - 1) * 100)
+                if "Perf.Y" not in out:  # <252 sesiones: usar el primer dato disponible
+                    out["Perf.Y"] = float((c.iloc[-1] / c.iloc[0] - 1) * 100)
+                if out.get("Perf.6M") is not None:
+                    _save_cache("sp500_benchmark_perf", out)
+                    return out
+    except Exception:
+        pass
+    return {}
+
+
+def _tradingview_technical_snapshot(ticker: str) -> dict:
+    """Reconstruye el dict de indicadores (mismas claves que
+    compute_technical_indicators) a partir de los valores puntuales de
+    TradingView. {} si no hay datos. NUNCA lanza."""
+    r = _tv_row(ticker)
+    if not r:
+        return {}
+    try:
+        def f(k):
+            v = r.get(k)
+            try:
+                v = float(v)
+                return v if v == v else None
+            except (TypeError, ValueError):
+                return None
+
+        close = f("close")
+        if not close:
+            return {}
+        ind = {"current_price": close}
+        sma20, sma50, sma100, sma200 = f("SMA20"), f("SMA50"), f("SMA100"), f("SMA200")
+        # TradingView no expone SMA150 → se aproxima con (SMA100+SMA200)/2
+        sma150 = ((sma100 + sma200) / 2.0) if (sma100 and sma200) else None
+        for n, ma in [(20, sma20), (50, sma50), (150, sma150), (200, sma200)]:
+            ind[f"sma_{n}"] = ma
+            ind[f"price_vs_sma{n}_pct"] = ((close / ma - 1) * 100) if ma else None
+        ind["rsi_14"] = f("RSI")
+        macd, sig = f("MACD.macd"), f("MACD.signal")
+        if macd is not None:
+            ind["macd"] = macd
+            ind["macd_signal"] = sig
+            ind["macd_hist"] = (macd - sig) if sig is not None else None
+        atr = f("ATR")
+        if atr is not None:
+            ind["atr_14"] = atr
+            ind["atr_pct"] = atr / close * 100
+        hi52, lo52 = f("price_52_week_high"), f("price_52_week_low")
+        ind["52w_high"] = hi52
+        ind["52w_low"] = lo52
+        ind["pct_from_52w_high"] = ((close / hi52 - 1) * 100) if hi52 else None
+        ind["pct_from_52w_low"] = ((close / lo52 - 1) * 100) if lo52 else None
+        ind["low_3m"] = f("Low.3M")
+        ind["analyst_target"] = f("price_target_average")   # target real de analistas
+        ind["stage"] = _compute_stage(pd.Series([close]), ind)
+        for k, label in [("Perf.6M", "6m"), ("Perf.3M", "3m"), ("Perf.1M", "1m"), ("Perf.Y", "1y")]:
+            v = f(k)
+            if v is not None:
+                ind[f"return_{label}"] = v
+        ind["_source"] = "tradingview"
+        return ind
+    except Exception:
+        return {}
+
+
+def get_technical_indicators(ticker: str, df: pd.DataFrame = None) -> dict:
+    """Indicadores técnicos con cadena de respaldo INFALIBLE:
+    1) OHLCV (yfinance → Nasdaq) + compute_technical_indicators.
+    2) Si viene vacío (Yahoo Y Nasdaq bloqueados en cloud) → snapshot de
+       TradingView, que sí responde en cloud. Así Stage, 52W, MA, RSI, ATR
+       SIEMPRE tienen datos reales, en localhost y en producción."""
+    if df is None:
+        df = get_price_history(ticker, period="2y")
+    if df is not None and not df.empty:
+        ind = compute_technical_indicators(df)
+        # Validar que los indicadores CLAVE sean números REALES. En cloud yfinance
+        # a veces devuelve un df NO-vacío pero corrupto/incompleto → los cálculos
+        # salen NaN. Si eso pasa, caemos a TradingView (que sí responde en cloud)
+        # en vez de propagar NaN. _isnum() trata NaN/inf como inválido.
+        def _isnum(x):
+            try:
+                x = float(x); return x == x and x not in (float("inf"), float("-inf"))
+            except (TypeError, ValueError):
+                return False
+        if ind and _isnum(ind.get("current_price")) and _isnum(ind.get("52w_high")) \
+                and _isnum(ind.get("sma_50")) and _isnum(ind.get("rsi_14")):
+            return ind
+    return _tradingview_technical_snapshot(ticker)
+
+
+def get_risk_levels(ticker: str, indicators: dict = None) -> dict:
+    """Niveles de riesgo (entrada/stop/target/ATR/RR) SIEMPRE calculables, con
+    la misma metodología que el agente de riesgo pero a prueba de bloqueos:
+    usa indicadores reales (OHLCV o TradingView). {} si no hay ni precio."""
+    ind = indicators or get_technical_indicators(ticker)
+    if not ind:
+        return {}
+    try:
+        price = ind.get("current_price")
+        if not price:
+            return {}
+        atr = ind.get("atr_14") or (price * 0.03)
+        hi52 = ind.get("52w_high") or (price * 1.25)
+        # Stop: mínimo reciente (Low.3M) 2% abajo, o 2×ATR bajo el precio.
+        low_ref = ind.get("low_3m")
+        stop_swing = (low_ref * 0.98) if low_ref else None
+        stop_atr = price - 2.0 * atr
+        stop = max([s for s in (stop_swing, stop_atr) if s is not None] or [stop_atr])
+        stop = min(stop, price * 0.99)   # nunca por encima del precio
+        # Target: 1º el target REAL de analistas (TradingView, funciona en cloud)
+        # si implica subida; si no, el máximo de 52 semanas / +25%.
+        analyst = ind.get("analyst_target")
+        if analyst and analyst > price * 1.02:
+            target = analyst
+        else:
+            target = hi52 if price < hi52 * 0.85 else price * 1.25
+        risk = (price - stop) / price * 100
+        reward = (target - price) / price * 100
+        rr = (reward / risk) if risk > 0 else 0
+        return {
+            "current_price": round(price, 2),
+            "stop": round(stop, 2),
+            "target": round(target, 2),
+            "atr_pct": round(atr / price * 100, 2),
+            "risk_pct": round(risk, 1),
+            "reward_pct": round(reward, 1),
+            "rr": round(rr, 2),
+        }
+    except Exception:
+        return {}
 
 
 # ── Precio en vivo (siempre fresco — TTL 60 segundos) ────────────────────
@@ -538,11 +873,21 @@ def compute_quality_ratios(info: dict, financials: dict) -> dict:
         if ca and cl and cl > 0:
             ratios["current_ratio"] = ca / cl
 
-    # Debt/Equity: preferir YF directo (coincide con lo que muestra Yahoo Finance)
+    # Debt/Equity SIEMPRE como RATIO (0.57 = deuda es 57% del patrimonio).
+    # yfinance devuelve `debtToEquity` en forma PORCENTUAL (57.6 = 0.576 de
+    # ratio), por eso antes se veía "57.6" en vez de "0.58" y el color (umbrales
+    # 0.5/1.5, que son de RATIO) siempre salía rojo. Lo dividimos entre 100 para
+    # dejarlo como ratio, igual que la rama calculada desde el balance.
     de_yf = info.get("debt_equity_yf")
     if de_yf is not None:
-        ratios["debt_to_equity"] = float(de_yf)
-    elif debt and equity and equity > 0:
+        try:
+            _de = float(de_yf)
+            # Heurística: si viene >5 es porcentaje (57.6) → a ratio; si ya es
+            # pequeño (1.38) es ratio y se deja igual.
+            ratios["debt_to_equity"] = (_de / 100.0) if _de > 5 else _de
+        except (TypeError, ValueError):
+            pass
+    if "debt_to_equity" not in ratios and debt and equity and equity > 0:
         ratios["debt_to_equity"] = debt / equity
 
     # FCF growth
@@ -696,7 +1041,51 @@ def get_relative_strength(ticker: str, benchmark: str = "SPY", period: str = "1y
 
     result = {"rs_score": 50, "rs_6m": None, "rs_3m": None, "rs_1m": None}
 
-    if stock_data.empty or spy_data.empty:
+    def _perf(row, k):
+        try:
+            v = float(row.get(k))
+            return v if v == v else None
+        except (TypeError, ValueError):
+            return None
+
+    # Respaldo INFALIBLE (cloud): RS con Perf puntuales. La acción se toma de
+    # TradingView (responde en datacenter); el benchmark S&P500 se toma del SPY
+    # histórico de Nasdaq (número REAL, también responde en datacenter). El ETF
+    # SPY no está en el escáner de acciones de TradingView, por eso NO se usa
+    # _tv_row para el benchmark. Muta `result`; devuelve True si logró rs_6m real.
+    def _rs_via_tradingview() -> bool:
+        try:
+            st = _tv_row(ticker)
+            if benchmark.upper() in ("SPY", "^GSPC", "GSPC", "SPX", "US500", "VOO", "IVV"):
+                bm = _sp500_benchmark_perf()
+            else:
+                bm = _tv_row(benchmark)
+            if not (st and bm):
+                return False
+            for tvk, rsk in [("Perf.1M", "rs_1m"), ("Perf.3M", "rs_3m"), ("Perf.6M", "rs_6m")]:
+                a, b = _perf(st, tvk), _perf(bm, tvk)
+                if a is not None and b is not None:
+                    result[rsk] = float(a - b)
+            a12, b12 = _perf(st, "Perf.Y"), _perf(bm, "Perf.Y")
+            if a12 is not None and b12 is not None:
+                result["rs_composite"] = float(a12 - b12)
+            return result.get("rs_6m") is not None
+        except Exception:
+            return False
+
+    # Datos utilizables = no-vacíos y con ≥20 cierres reales. Detecta el caso de
+    # cloud donde Yahoo devuelve un DataFrame no-vacío pero LLENO DE NaN.
+    def _usable(df) -> bool:
+        try:
+            return (not df.empty) and "Close" in df.columns \
+                and pd.to_numeric(df["Close"], errors="coerce").notna().sum() >= 20
+        except Exception:
+            return False
+
+    if not _usable(stock_data) or not _usable(spy_data) \
+            or len(stock_data.index.intersection(spy_data.index)) < 20:
+        if _rs_via_tradingview():
+            _save_cache(key, result)
         return result
 
     # Alinear fechas
@@ -724,6 +1113,14 @@ def get_relative_strength(ticker: str, benchmark: str = "SPY", period: str = "1y
     composite = rs12 * 0.40 + rs6 * 0.20 + rs3 * 0.20 + rs1 * 0.20
     # Normalizar a 0-99
     result["rs_composite"] = float(composite)
+
+    # Red de seguridad: si la data OHLCV salió parcialmente corrupta y el RS
+    # quedó NaN, reconstruir con TradingView antes de devolver/cachear.
+    rs6m = result.get("rs_6m")
+    if rs6m is None or rs6m != rs6m:
+        result = {"rs_score": 50, "rs_6m": None, "rs_3m": None, "rs_1m": None}
+        if not _rs_via_tradingview():
+            return result
 
     _save_cache(key, result)
     return result
