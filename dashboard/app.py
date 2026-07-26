@@ -28,15 +28,44 @@ from agents.orchestrator import Orchestrator, StockAnalysis
 from agents.screener import ScreenerAgent, ScreenerResult
 from dashboard.styles import (
     BLOOMBERG_CSS, get_recommendation_badge, score_color,
-    score_css_class, AGENT_ICONS,
+    score_css_class, AGENT_ICONS, AGENT_ICON_SLUG,
 )
 from dashboard.charts import (
     build_price_chart, build_mountain_chart, build_gauge, build_snowflake,
     build_score_breakdown, build_mini_gauge, build_rr_chart,
     build_sector_heatmap, build_compact_gauge, build_rsi_gauge,
     build_metric_bars, build_earnings_history_chart,
-    build_sentiment_gauge, build_holders_bars,
+    build_sentiment_gauge, build_holders_bars, STATIC_CHART_CONFIG,
 )
+
+
+def _chart(fig, **kwargs):
+    """Dibuja una gráfica de Plotly BLOQUEADA: no se puede hacer zoom, ni
+    arrastrar, ni reencuadrar con doble clic, ni tocar los ejes.
+
+    Punto ÚNICO por el que pasan TODAS las gráficas de la app (tacómetros,
+    barras, velas, radar, heatmap…), así ninguna se queda suelta aunque su
+    builder monte el layout por su cuenta.
+
+    `dragmode=False` es lo que desactiva el zoom por arrastre; el resto lo cubre
+    STATIC_CHART_CONFIG. A propósito NO se usa `staticPlot`, que bloquearía
+    también el hover y perderíamos los tooltips con los datos. Ante cualquier
+    error se dibuja la figura igualmente: nunca rompe el render."""
+    try:
+        fig.update_layout(dragmode=False)
+    except Exception:
+        pass
+    kwargs.setdefault("use_container_width", True)
+    kwargs["config"] = STATIC_CHART_CONFIG
+    # Tarjeta envolvente (misma estética que .analysis-card). El ancla oculta
+    # `.chart-card-anchor` es lo que el CSS busca con :has(): sin ella, un
+    # :has([stPlotlyChart]) genérico también pintaría cualquier contenedor
+    # ANCESTRO que tuviera una gráfica dentro. El padding vive en el WRAPPER,
+    # nunca en [stPlotlyChart], para no alterar la medición de ancho de Plotly
+    # (use_container_width).
+    with st.container(border=True):
+        st.markdown('<div class="chart-card-anchor"></div>', unsafe_allow_html=True)
+        st.plotly_chart(fig, **kwargs)
 
 # ── Config de página ──────────────────────────────────────────────────────
 st.set_page_config(
@@ -404,11 +433,67 @@ def inject_protection():
             removeByText(root);
         }
 
+        // ── Auto-ajuste del VALOR de las tarjetas ────────────────────────
+        // El valor debe leerse COMPLETO y en UNA sola línea. Si el texto es
+        // largo ("deteriorándose", "incertidumbre") no cabe al ancho de la
+        // tarjeta, así que le bajamos la fuente hasta que quepa. Se mide el
+        // ancho REAL del elemento, con lo que funciona igual en escritorio y
+        // en el iframe estrecho de Whop.
+        //
+        // Guardas: acotado a esas 2 clases; `data-fit` recuerda TEXTO + ANCHO ya
+        // ajustados para no re-medir en cada barrido (sin parpadeo ni bucles).
+        // El ancho forma parte de la clave a propósito: si solo se guardara el
+        // texto, al estrechar la ventana el texto seguiría siendo el mismo y la
+        // tarjeta nunca se recalcularía (se quedaría desbordada). Con el ancho
+        // dentro, cualquier cambio de tamaño dispara un nuevo ajuste — y como se
+        // parte de fontSize='' también vuelve a crecer al ensanchar.
+        // Hay además un mínimo de fuente para que nunca quede ilegible.
+        var FIT_SELECTOR = '.status-pill-value, .kpi-tile-value';
+        // Suelo de 7px: medido en el peor caso real (ventana de ~900px, donde la
+        // fila de 4 tarjetas deja pills de solo ~96px y una palabra como
+        // "Contrayendo" no entra ni a 9px). Sigue siendo legible y es preferible
+        // a partir la palabra en dos o recortarla.
+        var FIT_MIN_PX = 7;
+
+        function fitText(root) {
+            if (!root) return;
+            try {
+                var nodes = root.querySelectorAll(FIT_SELECTOR);
+                for (var i = 0; i < nodes.length; i++) {
+                    var el = nodes[i];
+                    try {
+                        // Ancho 0 = aún no visible (pestaña oculta): se ajustará
+                        // cuando se muestre, en un barrido posterior.
+                        if (!el.clientWidth) continue;
+                        var key = (el.textContent || '') + '|' + el.clientWidth;
+                        if (el.getAttribute('data-fit') === key) continue;
+                        // OJO: el tamaño se aplica con prioridad `important`.
+                        // Las media queries de estrecho declaran
+                        // `.status-pill-value { font-size: ... !important }`, que
+                        // GANA a un style inline normal: sin `important` aquí el
+                        // ajuste se calculaba pero no se veía (el texto seguía
+                        // desbordado justo en los anchos donde más falta hace).
+                        el.style.removeProperty('font-size');   // partir del CSS
+                        var size = parseFloat(window.getComputedStyle(el).fontSize);
+                        var guard = 0;
+                        while (el.scrollWidth > el.clientWidth + 1 &&
+                               size > FIT_MIN_PX && guard++ < 60) {
+                            size -= 0.5;
+                            el.style.setProperty('font-size', size + 'px', 'important');
+                        }
+                        el.setAttribute('data-fit', key);
+                    } catch (e) {}
+                }
+            } catch (e) {}
+        }
+
         // Nukear en todos los documentos accesibles: el propio y window.top
         function nukeEverywhere() {
             nukeBranding(doc);
             try { if (window.top && window.top.document) nukeBranding(window.top.document); } catch (e) {}
             try { if (window.parent && window.parent.document) nukeBranding(window.parent.document); } catch (e) {}
+            // El contenido de la app vive en el documento padre, no en este iframe.
+            try { if (window.parent && window.parent.document) fitText(window.parent.document); } catch (e) {}
         }
 
         nukeEverywhere();
@@ -437,7 +522,7 @@ def get_client() -> anthropic.Anthropic:
     if st.session_state.client is None or cached_key != current_key:
         _debug_log(f"get_client: key prefix={current_key[:15] if current_key else 'EMPTY'}, len={len(current_key)}")
         if not current_key or len(current_key) < 50:
-            st.error("⚠️ ANTHROPIC_API_KEY no configurada o inválida. Verifica el archivo .env")
+            st.error("ANTHROPIC_API_KEY no configurada o inválida. Verifica el archivo .env")
             st.stop()
         st.session_state.client = anthropic.Anthropic(api_key=current_key)
         st.session_state._cached_api_key = current_key
@@ -503,18 +588,44 @@ def _sb_load_scan(scan_id: str):
     st.session_state._scan_diagnostics = {}
 
 
+@st.cache_data(show_spinner=False)
+def _logo_data_uri() -> str:
+    """Logo del Club DLP como data-URI en base64.
+
+    Se incrusta en el HTML en vez de servirse como fichero: así no depende de
+    rutas estáticas y se ve igual en local y en cloud. Si el asset faltara,
+    devuelve "" y el sidebar cae al logo tipográfico de siempre."""
+    try:
+        import base64
+        from pathlib import Path
+        p = Path(__file__).parent / "assets" / "logo_dlp.png"
+        return "data:image/png;base64," + base64.b64encode(p.read_bytes()).decode()
+    except Exception:
+        return ""
+
+
 def render_sidebar():
     with st.sidebar:
         # ── Brand ───────────────────────────────────────────────────────
-        st.markdown("""
-        <div class="sidebar-brand">
-            <div class="sidebar-brand-logo">◈ DLP</div>
-            <div class="sidebar-brand-sub">MARKET ANALYZER</div>
-        </div>
-        """, unsafe_allow_html=True)
+        _logo = _logo_data_uri()
+        if _logo:
+            st.markdown(
+                f'<div class="sidebar-brand">'
+                f'<img class="sidebar-brand-img" src="{_logo}" alt="Club DLP">'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        else:
+            # Respaldo: si el PNG no está, se mantiene el logo tipográfico.
+            st.markdown("""
+            <div class="sidebar-brand">
+                <div class="sidebar-brand-logo">◈ DLP</div>
+                <div class="sidebar-brand-sub">MARKET ANALYZER</div>
+            </div>
+            """, unsafe_allow_html=True)
 
         # ── Home ─────────────────────────────────────────────────────────
-        if st.button("⌂  Volver al Home", use_container_width=True,
+        if st.button("⌂  Volver al Inicio", use_container_width=True,
                      key="sidebar_home"):
             _sb_go_home()
             st.rerun()
@@ -603,7 +714,7 @@ def render_top_nav():
     apretaba demasiado el contenido). Solo se muestra en vistas NO-welcome."""
     col_a, col_home, col_c = st.columns([1, 2, 1])
     with col_home:
-        if st.button("⌂  Volver al Home", use_container_width=True,
+        if st.button("⌂  Volver al Inicio", use_container_width=True,
                      key="topnav_home_btn"):
             st.session_state.selected_ticker = None
             st.session_state.quick_view_ticker = None
@@ -718,7 +829,7 @@ def run_analysis(ticker: str):
     # 1. Sanitizar entrada — quita espacios en cualquier posición.
     sanitized, sanitize_err = _sanitize_ticker_input(ticker)
     if sanitize_err:
-        st.error(f"❌ {sanitize_err}")
+        st.error(f"{sanitize_err}")
         _debug_log(f"  sanitize rejected: {sanitize_err}")
         return
     if not sanitized:
@@ -738,7 +849,7 @@ def run_analysis(ticker: str):
             exists = _ticker_exists_on_yahoo(ticker)
         if not exists:
             st.error(
-                f"❌ El ticker **{ticker}** no existe o no tiene datos en Yahoo Finance.\n\n"
+                f"El ticker **{ticker}** no existe o no tiene datos en Yahoo Finance.\n\n"
                 "Verifica que esté bien escrito (ejemplos correctos: **AAPL** para Apple, "
                 "**NVDA** para NVIDIA, **BRK.B** para Berkshire Hathaway clase B).\n\n"
                 "_El análisis no se ejecutó — no se gastaron créditos._"
@@ -898,7 +1009,7 @@ def run_market_scan(filters: Optional[dict] = None):
         progress_bar.progress(pct)
         progress_placeholder.markdown(
             f'<div style="color:#E2B25C;font-family:JetBrains Mono;font-size:0.85rem;">'
-            f'🌐 Escaneando mercado: {ticker} ({idx}/{total})</div>',
+            f'Escaneando el mercado · {ticker} ({idx}/{total})</div>',
             unsafe_allow_html=True,
         )
 
@@ -946,19 +1057,42 @@ def _conviction_es(v) -> str:
     return m.get(s, s or "—")
 
 
+# El agente de riesgo conserva su nombre INTERNO ("Riesgo & Sizing" — clave del
+# icono y del scoring, y de los análisis ya cacheados), pero en pantalla se
+# rotula solo "Riesgo". Es un alias de DISPLAY, reversible, que no toca datos.
+_AGENT_DISPLAY_ALIAS = {"Riesgo & Sizing": "Riesgo"}
+
+
+def _agent_display_name(report):
+    return _AGENT_DISPLAY_ALIAS.get(getattr(report, "agent_name", ""), report.agent_name)
+
+
+def _agent_icon_html(agent_name) -> str:
+    """Chip del ícono de una sección.
+
+    Si la sección tiene ícono SVG propio (AGENT_ICON_SLUG) se emite el chip con
+    la clase `agent-icon--<slug>`, que es la que lo dibuja desde el CSS. Si no
+    lo tuviera, se cae al monograma de siempre (FN/TC/…), así ninguna sección
+    se queda con el chip vacío."""
+    slug = AGENT_ICON_SLUG.get(agent_name)
+    if slug:
+        return f'<span class="agent-icon agent-icon--{slug}"></span>'
+    return f'<span class="agent-icon">{AGENT_ICONS.get(agent_name, "")}</span>'
+
+
 def _render_agent_header(report):
     """Header strip con icono, nombre del agente, score y conviction badge."""
     score = report.score
     color = score_color(score)
-    icon = AGENT_ICONS.get(report.agent_name) or (str(report.agent_name)[:2].upper() or "··")
     conv_colors = {"HIGH": "#3DD68C", "MEDIUM": "#E2B25C", "LOW": "#F1495F"}
     conv_color = conv_colors.get((report.conviction or "").upper(), "#E2B25C")
     conv_es = _conviction_es(report.conviction)
+    icon_html = _agent_icon_html(report.agent_name)
     st.markdown(f"""
     <div class="agent-header">
         <div class="agent-header-left">
-            <span class="agent-icon">{icon}</span>
-            <span class="agent-name">{report.agent_name}</span>
+            {icon_html}
+            <span class="agent-name">{_agent_display_name(report)}</span>
         </div>
         <div class="agent-header-right">
             <span class="agent-score" style="color:{color};">{score:.0f}<span class="agent-score-max">/100</span></span>
@@ -1028,7 +1162,7 @@ def _render_metric_tiles(metrics):
 
 
 def _render_status_pills(pills):
-    """Fila de pills de estado. pills = [{label, value, level, meter?}].
+    """Fila de pills de estado. pills = [{label, value, level, meter?, tooltip?}].
     El color vive en un punto indicador y el termómetro traduce el nivel
     (o un `meter` 0-100 explícito) a posición rojo→ámbar→verde."""
     if not pills:
@@ -1043,9 +1177,16 @@ def _render_status_pills(pills):
             pct = p.get("meter", level_meter.get(level, 55.0))
             sub = p.get("sub", "")
             sub_html = f'<div class="status-pill-sub">{sub}</div>' if sub else ''
+            # Mismo botón de ayuda que los KPI tiles: '?' arriba a la derecha
+            # que muestra la explicación al pasar el ratón.
+            tooltip = p.get("tooltip", "")
+            help_html = f'<span class="kpi-help" data-tooltip="{tooltip}">?</span>' if tooltip else ""
             st.markdown(f"""
             <div class="status-pill">
-                <div class="status-pill-label">{p['label']}</div>
+                <div class="status-pill-header">
+                    <div class="status-pill-label">{p['label']}</div>
+                    {help_html}
+                </div>
                 <div class="status-pill-value"><span class="status-pill-dot" style="background:{color};"></span>{p['value']}</div>
                 {sub_html}
                 {_meter_html(pct)}
@@ -1064,15 +1205,21 @@ def _signal_card_html(title, items, kind):
 
 
 def _render_pros_cons(report, pros_title="Señales positivas", cons_title="Señales de riesgo"):
-    col_p, col_c = st.columns(2)
-    with col_p:
-        if report.pros:
-            st.markdown(_signal_card_html(pros_title, report.pros[:3], "pos"),
-                        unsafe_allow_html=True)
-    with col_c:
-        if report.cons:
-            st.markdown(_signal_card_html(cons_title, report.cons[:3], "neg"),
-                        unsafe_allow_html=True)
+    # Cap a máximo 3 cada uno — garantiza el límite sin importar lo que devuelva
+    # la IA (las muestra como "las 3 más importantes"). Ahorra y ordena la UI.
+    #
+    # Ambas tarjetas se emiten en UN SOLO bloque flex (no en dos st.columns): así
+    # `align-items: stretch` garantiza que las dos tengan SIEMPRE la misma altura
+    # — la que tenga más ítems fija la altura y la otra la iguala. Con columnas
+    # separadas el height:100% no propaga por el anidado de Streamlit.
+    cards = ""
+    if report.pros:
+        cards += _signal_card_html(pros_title, report.pros[:3], "pos")
+    if report.cons:
+        cards += _signal_card_html(cons_title, report.cons[:3], "neg")
+    if cards:
+        st.markdown(f'<div class="signal-card-row">{cards}</div>',
+                    unsafe_allow_html=True)
 
 
 def _render_analysis_card(report, title="Análisis Detallado"):
@@ -1261,7 +1408,11 @@ def _resolve_sector(analysis, rd):
 
 
 def _clean_tile_value(value, max_len=22):
-    """Limpia valor para tile: quita paréntesis, descripciones largas, traduce y trunca."""
+    """Limpia el valor de una tarjeta: quita paréntesis y descripciones largas,
+    y lo traduce. YA NO trunca con "…": el valor llega COMPLETO al DOM y, si no
+    cabe de ancho, fitText() le baja el tamaño de fuente para que se lea entero
+    en una sola línea. `max_len` se mantiene en la firma porque los llamadores
+    lo siguen pasando, pero ya no recorta nada."""
     if value is None or value == "":
         return "—"
     s = str(value).strip()
@@ -1276,9 +1427,6 @@ def _clean_tile_value(value, max_len=22):
         return "—"
     # Traduce términos comunes
     s = _translate_status(s)
-    # Trunca con ellipsis
-    if len(s) > max_len:
-        s = s[:max_len].rstrip() + "…"
     return s
 
 
@@ -1429,8 +1577,7 @@ def render_overview(analysis: StockAnalysis):
 
     with col_gauge:
         fig = _cached_gauge_fig(analysis.composite_score, analysis.recommendation)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_overview_gauge_{analysis.ticker}")
+        _chart(fig, key=f"chart_overview_gauge_{analysis.ticker}")
 
         # Badge de recomendación
         badge_html = get_recommendation_badge(analysis.recommendation)
@@ -1451,13 +1598,11 @@ def render_overview(analysis: StockAnalysis):
 
     with col_snow:
         fig = _cached_snowflake_fig(analysis.snowflake)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_overview_snowflake_{analysis.ticker}")
+        _chart(fig, key=f"chart_overview_snowflake_{analysis.ticker}")
 
     with col_bar:
         fig = _cached_breakdown_fig(analysis.score_breakdown)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_overview_breakdown_{analysis.ticker}")
+        _chart(fig, key=f"chart_overview_breakdown_{analysis.ticker}")
 
     st.markdown("---")
 
@@ -1492,8 +1637,6 @@ def render_overview(analysis: StockAnalysis):
             target_str = f"${analysis.target_price:.2f}" if analysis.target_price else "—"
             rr_str     = _extract_rr_ratio(analysis.risk_reward)
             rr_num     = _safe_num(str(analysis.risk_reward or "").split(":")[0]) if analysis.risk_reward else None
-            sizing_str = _extract_percent(analysis.position_size_pct) if analysis.position_size_pct else "—"
-            sizing_num = _safe_num(sizing_str)
 
             metrics = [
                 {
@@ -1509,12 +1652,6 @@ def render_overview(analysis: StockAnalysis):
                     "color": ("#3DD68C" if (rr_num or 0) >= 3 else
                               "#E2B25C" if (rr_num or 0) >= 2 else "#F1495F"),
                     "tooltip": "Risk/Reward Ratio — relación entre la ganancia potencial al target y la pérdida máxima al stop. Un 3:1 significa que arriesgas 1 para ganar 3. Mínimo aceptable para operar: 2:1. El color del valor indica si supera el umbral (verde ≥3, amarillo ≥2, rojo <2).",
-                },
-                {
-                    "icon": "📐", "label": "Sizing", "value": sizing_str,
-                    "color": ("#F1495F" if (sizing_num or 0) == 0 else
-                              "#9D8CE0"),
-                    "tooltip": "Position Sizing — porcentaje del portafolio sugerido. Calculado vía Kelly Criterion modificado. 0% indica que el sistema recomienda NO operar (R/R insuficiente).",
                 },
             ]
 
@@ -1540,7 +1677,7 @@ def render_overview(analysis: StockAnalysis):
                 st.markdown(f"""
                 <div class="kpi-tile">
                     <div class="kpi-tile-header">
-                        <span class="kpi-tile-label">{m['icon']} {m['label']}</span>
+                        <span class="kpi-tile-label">{m['label']}</span>
                         <span class="kpi-help" data-tooltip="{m['tooltip']}">?</span>
                     </div>
                     <div class="kpi-tile-value" style="color:{m['color']};">{m['value']}</div>
@@ -1558,6 +1695,16 @@ def render_overview(analysis: StockAnalysis):
             for veto in analysis.vetos_applied:
                 st.markdown(f'<div class="veto-item">{veto}</div>', unsafe_allow_html=True)
 
+        # ── Upside/Downside, DEBAJO de los datos clave ────────────
+        # Vive en esta columna (y no a lo ancho, como antes) para aprovechar el
+        # hueco bajo las métricas. Va en versión `compact` para que quepa en la
+        # columna estrecha; el eje de precio se autoescala a target/stop.
+        _ov_price, _ov_stop, _ov_target = _rr_levels(analysis)
+        if _ov_price and _ov_stop and _ov_target:
+            _chart(build_rr_chart(_ov_price, _ov_stop, _ov_target,
+                                  analysis.ticker, compact=True),
+                   key=f"chart_overview_rr_{analysis.ticker}")
+
     with col_thesis:
         st.markdown("#### Tesis de Inversión")
         st.markdown(
@@ -1565,16 +1712,15 @@ def render_overview(analysis: StockAnalysis):
             unsafe_allow_html=True,
         )
 
-        # ── Fortalezas / Riesgos agrupados en signal-cards ────────
-        col_s, col_r = st.columns(2)
-        with col_s:
-            if analysis.key_strengths:
-                st.markdown(_signal_card_html("Fortalezas Clave", analysis.key_strengths, "pos"),
-                            unsafe_allow_html=True)
-        with col_r:
-            if analysis.key_risks:
-                st.markdown(_signal_card_html("Riesgos Clave", analysis.key_risks, "neg"),
-                            unsafe_allow_html=True)
+        # ── Fortalezas / Riesgos agrupados en signal-cards de igual altura ──
+        _sr_cards = ""
+        if analysis.key_strengths:
+            _sr_cards += _signal_card_html("Fortalezas Clave", analysis.key_strengths, "pos")
+        if analysis.key_risks:
+            _sr_cards += _signal_card_html("Riesgos Clave", analysis.key_risks, "neg")
+        if _sr_cards:
+            st.markdown(f'<div class="signal-card-row">{_sr_cards}</div>',
+                        unsafe_allow_html=True)
 
         # ── Card NUEVA: Diagnóstico de Asimetría (upside / downside / balanced) ─
         asym_dir = getattr(analysis, "asymmetry_direction", None)
@@ -1590,7 +1736,7 @@ def render_overview(analysis: StockAnalysis):
                     "body": "El <span class='em'>downside potencial supera al upside</span>. La recompensa actual NO compensa el riesgo. Esperar mejor punto de entrada o evitar la posición.",
                 },
                 "balanced": {
-                    "icon": "⚖️", "title": "Riesgo Equilibrado",
+                    "icon": "⚖️", "title": "Riesgo Balanceado",
                     "body": "El <span class='em'>upside y downside son similares</span>. No hay edge claro de asimetría — la decisión debe basarse en la calidad estructural del negocio y el horizonte temporal.",
                 },
             }[asym_dir]
@@ -1621,14 +1767,8 @@ def render_overview(analysis: StockAnalysis):
             </div>
             """, unsafe_allow_html=True)
 
-    # Risk/Reward visual — precio actual en vivo, con respaldo de get_risk_levels
-    # cuando el análisis guardado no trae stop/target (o vinieron NaN en cloud).
-    current_price, _stop, _target = _rr_levels(analysis)
-    if current_price and _stop and _target:
-        st.markdown("---")
-        fig = _cached_rr_fig(current_price, _stop, _target, analysis.ticker)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_overview_rr_{analysis.ticker}")
+    # (El R/R visual del Overview ahora vive en compact dentro de col_info,
+    # bajo las Métricas Clave — ver arriba.)
 
 
 # ── Technical Tab ─────────────────────────────────────────────────────────
@@ -1696,37 +1836,39 @@ def render_technical(analysis: StockAnalysis):
     # gráfica simplificada solo cuando el usuario la pide.
     fig = (build_mountain_chart(df, analysis.ticker) if is_line
            else _cached_price_fig(analysis.ticker, period="2y"))
-    st.plotly_chart(
-        fig, use_container_width=True,
-        config={"displayModeBar": False},
-        key=f"chart_technical_price_{analysis.ticker}_{'line' if is_line else 'candles'}",
-    )
+    _chart(fig, key=f"chart_technical_price_{analysis.ticker}_{'line' if is_line else 'candles'}",)
 
     # ── Status pills clave (Stage, RSI, MACD, Distancia 52W high) ──
     st.markdown('<div class="section-title-bar">Indicadores Clave</div>', unsafe_allow_html=True)
 
-    stage = indicators.get("stage", 0) or 0
+    # Todos los indicadores pasan por _safe_num → NaN/None se muestran como "—",
+    # nunca como "nan%". (En cloud, si un dato faltara puntualmente, degrada bien.)
+    stage = int(_safe_num(indicators.get("stage")) or 0)
     stage_level = "good" if stage == 2 else "neutral" if stage == 1 else "warn" if stage == 3 else "bad"
     stage_sub = {2: "Tendencia alcista", 1: "Acumulación", 3: "Distribución", 4: "Bajista"}.get(stage, "Sin definir")
 
-    rsi = indicators.get("rsi_14", 50) or 50
-    rsi_level = "bad" if rsi > 70 or rsi < 30 else "good" if 40 <= rsi <= 60 else "neutral"
+    rsi = _safe_num(indicators.get("rsi_14"))
+    rsi_level = "neutral" if rsi is None else ("bad" if rsi > 70 or rsi < 30 else "good" if 40 <= rsi <= 60 else "neutral")
 
-    macd_hist = indicators.get("macd_hist", 0) or 0
-    macd_level = "good" if macd_hist > 0 else "bad"
-    macd_val = "Alcista" if macd_hist > 0 else "Bajista"
+    macd_hist = _safe_num(indicators.get("macd_hist"))
+    macd_level = "neutral" if macd_hist is None else ("good" if macd_hist > 0 else "bad")
+    macd_val = "—" if macd_hist is None else ("Alcista" if macd_hist > 0 else "Bajista")
 
-    pct_high = indicators.get("pct_from_52w_high", 0) or 0
-    high_level = "good" if pct_high > -5 else "neutral" if pct_high > -15 else "bad"
+    pct_high = _safe_num(indicators.get("pct_from_52w_high"))
+    high_level = "neutral" if pct_high is None else ("good" if pct_high > -5 else "neutral" if pct_high > -15 else "bad")
 
     _render_status_pills([
-        {"label": "Stage Minervini", "value": f"Stage {stage}", "level": stage_level, "sub": stage_sub},
-        {"label": "RSI 14", "value": f"{rsi:.1f}", "level": rsi_level,
-         "sub": "Sobrecomprado" if rsi > 70 else "Sobrevendido" if rsi < 30 else "Neutral"},
+        {"label": "Stage Minervini", "value": (f"Stage {stage}" if stage else "—"), "level": stage_level, "sub": stage_sub,
+         "tooltip": "Etapa del ciclo de Minervini según dónde está el precio respecto a sus medias móviles. Stage 1 = acumulación (base lateral tras caer), Stage 2 = tendencia alcista confirmada (la etapa ideal para comprar), Stage 3 = distribución (techo, el dinero fuerte va saliendo), Stage 4 = tendencia bajista."},
+        {"label": "RSI 14", "value": (f"{rsi:.1f}" if rsi is not None else "—"), "level": rsi_level,
+         "sub": ("Sobrecomprado" if (rsi or 0) > 70 else "Sobrevendido" if (rsi is not None and rsi < 30) else "Neutral"),
+         "tooltip": "Índice de Fuerza Relativa de 14 días: mide si el precio ha subido o bajado demasiado rápido. Por encima de 70 está sobrecomprado (riesgo de corrección); por debajo de 30 sobrevendido (posible rebote); entre 40 y 60 es zona neutral y saludable."},
         {"label": "MACD Hist", "value": macd_val, "level": macd_level,
-         "sub": f"{macd_hist:+.3f}"},
-        {"label": "Dist. 52W High", "value": f"{pct_high:.1f}%", "level": high_level,
-         "sub": "Cerca del máximo" if pct_high > -5 else "Lejos del máximo"},
+         "sub": (f"{macd_hist:+.3f}" if macd_hist is not None else "sin dato"),
+         "tooltip": "Histograma del MACD: distancia entre el MACD y su línea de señal. Positivo significa que el impulso alcista se acelera; negativo, que se está agotando. Suele avisar del cambio de momentum antes de que se vea en el precio."},
+        {"label": "Dist. 52W High", "value": (f"{pct_high:.1f}%" if pct_high is not None else "—"), "level": high_level,
+         "sub": ("Cerca del máximo" if (pct_high is not None and pct_high > -5) else "Lejos del máximo" if pct_high is not None else "sin dato"),
+         "tooltip": "Cuánto le falta al precio para volver a su máximo de las últimas 52 semanas. Cerca de 0% indica fortaleza (cotiza en máximos anuales); muy negativo indica que sigue lejos de su techo del año."},
     ])
 
     # ── Performance vs MAs y vs SPY ──
@@ -1744,8 +1886,7 @@ def render_technical(analysis: StockAnalysis):
                 ma_items.append((f"vs SMA {n}", pct, bar_color))
         if ma_items:
             fig_ma = build_metric_bars(ma_items, height=220, title="DISTANCIA A MOVING AVERAGES")
-            st.plotly_chart(fig_ma, use_container_width=True, config={"displayModeBar": False},
-                            key=f"chart_technical_mas_{analysis.ticker}")
+            _chart(fig_ma, key=f"chart_technical_mas_{analysis.ticker}")
 
     with col_rs:
         rs_items = []
@@ -1756,8 +1897,7 @@ def render_technical(analysis: StockAnalysis):
                 rs_items.append((label, v, bar_color))
         if rs_items:
             fig_rs = build_metric_bars(rs_items, height=220, title="RELATIVE STRENGTH vs S&P 500")
-            st.plotly_chart(fig_rs, use_container_width=True, config={"displayModeBar": False},
-                            key=f"chart_technical_rs_{analysis.ticker}")
+            _chart(fig_rs, key=f"chart_technical_rs_{analysis.ticker}")
 
     # ── Señales alcistas / bajistas (cards) ──
     _render_pros_cons(tech_report,
@@ -1980,9 +2120,8 @@ def render_fundamentals(analysis: StockAnalysis):
     if sub_items:
         fig = build_metric_bars(sub_items, height=240,
                                 title="SUB-SCORES (0-100)", x_format="num",
-                                x_zero_line=False)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_fund_pillars_{analysis.ticker}")
+                                x_zero_line=False, color_by_score=True)
+        _chart(fig, key=f"chart_fund_pillars_{analysis.ticker}")
 
     # ── Pros / Cons ──
     _render_pros_cons(report)
@@ -2033,16 +2172,20 @@ def render_future(analysis: StockAnalysis):
         {"label": "Moat Defensivo",
          "value": _clean_tile_value(km.get("moat_strength"), max_len=14),
          "level": moat_level,
-         "sub": _clean_tile_value(km.get("moat_type"), max_len=20)},
+         "sub": _clean_tile_value(km.get("moat_type"), max_len=20),
+         "tooltip": "Fuerza de la ventaja competitiva que protege a la empresa de sus rivales: marca, efectos de red, costos de cambio o escala. Cuanto más ancho es el foso, más difícil resulta que la competencia le quite márgenes y cuota."},
         {"label": "Riesgo Disrupción",
          "value": _clean_tile_value(km.get("disruption_risk"), max_len=14),
-         "level": disr_level, "sub": "IA / tecnología"},
+         "level": disr_level, "sub": "IA / tecnología",
+         "tooltip": "Probabilidad de que la inteligencia artificial, un cambio tecnológico o un nuevo modelo de negocio dejen obsoleto lo que la empresa vende. Riesgo bajo significa un negocio difícil de desplazar en la próxima década."},
         {"label": "Crecimiento TAM",
          "value": _clean_tile_value(km.get("tam_growth"), max_len=18),
-         "level": tam_level, "sub": "Mercado direccionable"},
+         "level": tam_level, "sub": "Mercado direccionable",
+         "tooltip": "Ritmo al que crece el mercado total al que la empresa puede aspirar (TAM). Si el mercado se expande, puede crecer sin necesidad de robarle cuota a nadie; si está estancado, todo crecimiento sale del competidor."},
         {"label": "Calidad Gerencia",
          "value": _clean_tile_value(km.get("management_quality"), max_len=14),
-         "level": mgmt_level, "sub": "Asignación de capital"},
+         "level": mgmt_level, "sub": "Asignación de capital",
+         "tooltip": "Calidad del equipo directivo juzgada por cómo asigna el capital: recompras a buen precio, adquisiciones sensatas, control de la dilución y reinversión con retorno alto. Es lo que más compone valor a largo plazo."},
     ])
 
     # ── Bar chart: 4 pilares del futuro ──
@@ -2065,9 +2208,8 @@ def render_future(analysis: StockAnalysis):
     if sub_items:
         fig = build_metric_bars(sub_items, height=240,
                                 title="SUB-SCORES (0-100)", x_format="num",
-                                x_zero_line=False)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_future_pillars_{analysis.ticker}")
+                                x_zero_line=False, color_by_score=True)
+        _chart(fig, key=f"chart_future_pillars_{analysis.ticker}")
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
@@ -2149,26 +2291,48 @@ def render_institutional(analysis: StockAnalysis):
 
     top_inst = holders_raw.get("top_institutions") or _hold.get("top_institutions") or []
 
+    # Niveles/termómetros calculados desde el DATO real (numérico, agnóstico al
+    # idioma del enum). Propiedad institucional: sana entre 40-85%; >90% saturada.
+    inst_num = _safe_num(str(inst_pct).replace("%", ""))
+    if inst_num is None:
+        inst_level, inst_meter = "neutral", None
+    elif 40 <= inst_num <= 85:
+        inst_level, inst_meter = "good", _meter_scale(inst_num, 20, 78)
+    elif inst_num > 85:
+        inst_level, inst_meter = "warn", 55.0
+    else:
+        inst_level, inst_meter = "neutral", _meter_scale(inst_num, 0, 80)
+    # Short interest: menos apuestas en contra = mejor (escala continua).
+    short_num = _safe_num(str(short_pct).replace("%", ""))
+    short_level = ("neutral" if short_num is None else
+                   "good" if short_num < 3 else
+                   "neutral" if short_num < 8 else
+                   "warn" if short_num < 15 else "bad")
+    short_meter = _meter_scale(short_num, 0, 20, invert=True)
+
     _render_status_pills([
         {"label": "Propiedad Institucional",
          "value": inst_pct,
-         "level": "good", "sub": "% del outstanding"},
+         "level": inst_level, "meter": inst_meter, "sub": "% del capital en fondos",
+         "tooltip": "Porcentaje del capital en manos de fondos, aseguradoras y grandes gestoras. Una participación alta indica respaldo profesional y más liquidez; si es excesiva, queda poco dinero nuevo por entrar."},
         {"label": "Señal de Insiders",
          "value": _clean_tile_value(insider_raw, max_len=12),
-         "level": insider_level, "sub": "Compras vs ventas"},
+         "level": insider_level, "sub": "Compras vs ventas",
+         "tooltip": "Saldo entre compras y ventas de directivos y consejeros de la propia empresa. Que compren con su dinero suele ser la señal más honesta de confianza; las ventas pueden deberse solo a liquidez personal."},
         {"label": "Short Interest",
          "value": short_pct,
-         "level": "neutral", "sub": "% del float"},
+         "level": short_level, "meter": short_meter, "sub": "Apuestas a la baja",
+         "tooltip": "Porcentaje de acciones vendidas en corto, es decir, apostando a que el precio caiga. Un valor alto refleja desconfianza del mercado, pero también es combustible para un rebote si esa tesis bajista falla."},
         {"label": "Potencial Squeeze",
          "value": _clean_tile_value(squeeze_raw, max_len=12),
-         "level": squeeze_level, "sub": "Short squeeze"},
+         "level": squeeze_level, "sub": "Rebote por cierre de cortos",
+         "tooltip": "Posibilidad de un short squeeze: si el precio sube, quienes vendieron en corto se ven forzados a recomprar y esa recompra acelera la subida. Depende del short interest y de los días que costaría cubrir esas posiciones."},
     ])
 
     # ── Top holders bar chart ──
     if top_inst:
         fig = build_holders_bars(top_inst)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_inst_holders_{analysis.ticker}")
+        _chart(fig, key=f"chart_inst_holders_{analysis.ticker}")
 
     # ── Smart Money Signal pill grande ──
     smart_raw = km.get("smart_money_signal") or "neutral"
@@ -2296,8 +2460,7 @@ def render_catalysts(analysis: StockAnalysis):
         st.markdown('<div class="section-title-bar">Track Record de Earnings</div>',
                     unsafe_allow_html=True)
         fig = build_earnings_history_chart(eh)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_catalysts_earn_{analysis.ticker}")
+        _chart(fig, key=f"chart_catalysts_earn_{analysis.ticker}")
 
     # ── Top Catalyst destacado ──
     top_cat = rd.get("top_catalyst", "")
@@ -2355,16 +2518,20 @@ def render_macro(analysis: StockAnalysis):
     _render_status_pills([
         {"label": "Entorno Mercado",
          "value": _clean_tile_value(env_raw, max_len=12),
-         "level": env_level, "sub": "Risk On / Off"},
+         "level": env_level, "sub": "Risk On / Off",
+         "tooltip": "Apetito de riesgo general del mercado. Risk-On: los inversores compran activos de riesgo; Risk-Off: se refugian en bonos y efectivo. Marca el viento a favor o en contra para cualquier acción, por buena que sea."},
         {"label": "Momentum Sector",
          "value": _clean_tile_value(sec_raw, max_len=12),
-         "level": sec_level, "sub": f"Sector: {_resolve_sector(analysis, rd)}"},
+         "level": sec_level, "sub": f"Sector: {_resolve_sector(analysis, rd)}",
+         "tooltip": "Comportamiento reciente del sector de la empresa frente al resto del mercado. Un sector fuerte empuja al alza incluso a las compañías mediocres; uno débil frena a las buenas."},
         {"label": "Curva Yield",
          "value": _clean_tile_value(yc_raw, max_len=12),
-         "level": yc_level, "sub": "10Y-2Y spread"},
+         "level": yc_level, "sub": "10Y-2Y spread",
+         "tooltip": "Diferencia entre el bono a 10 años y el de 2 años. Normal (positiva) indica economía sana; plana, desaceleración; invertida ha anticipado históricamente las recesiones."},
         {"label": "Nivel VIX",
          "value": _clean_tile_value(vix_raw, max_len=12),
-         "level": vix_level, "sub": "Volatilidad esperada"},
+         "level": vix_level, "sub": "Volatilidad esperada",
+         "tooltip": "Índice de volatilidad esperada del mercado, conocido como el índice del miedo. Por debajo de 20 hay calma; entre 20 y 30, tensión; por encima de 30, pánico y movimientos bruscos."},
     ])
 
     # ── Sector heatmap ──
@@ -2376,8 +2543,7 @@ def render_macro(analysis: StockAnalysis):
         st.markdown('<div class="section-title-bar">Rotación Sectorial (1Y)</div>',
                     unsafe_allow_html=True)
         fig = build_sector_heatmap(sector_perf)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_macro_sector_heatmap_{analysis.ticker}")
+        _chart(fig, key=f"chart_macro_sector_heatmap_{analysis.ticker}")
 
     # ── Snapshot de indicadores macro ──
     st.markdown('<div class="section-title-bar">Snapshot Macro</div>',
@@ -2445,12 +2611,11 @@ def render_sentiment(analysis: StockAnalysis):
     col_gauge, col_pills = st.columns([1, 2])
 
     with col_gauge:
-        fig = build_sentiment_gauge(report.score, height=260)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_sent_gauge_{analysis.ticker}")
+        fig = build_sentiment_gauge(report.score, height=310)
+        _chart(fig, key=f"chart_sent_gauge_{analysis.ticker}")
 
     with col_pills:
-        st.markdown('<div class="section-title-bar" style="margin-top:0;">📰 Estado de la Narrativa</div>',
+        st.markdown('<div class="section-title-bar" style="margin-top:0;">Estado de la Narrativa</div>',
                     unsafe_allow_html=True)
 
         mom_raw = km.get("sentiment_momentum") or "stable"
@@ -2467,21 +2632,66 @@ def render_sentiment(analysis: StockAnalysis):
         rep_level = ("good" if "low" in rep_raw.lower() else
                      "bad" if "high" in rep_raw.lower() else "warn")
 
-        _render_status_pills([
+        # ── Descripciones derivadas del estado REAL ──────────────────
+        # Frases completas en vez de etiquetas sueltas ("Mejorando o
+        # deteriorando"): dicen lo que de verdad está pasando con esta acción.
+        _mom = mom_raw.lower()
+        if "improv" in _mom or "mejor" in _mom:
+            mom_sub = "El tono de las noticias mejora y empieza a acompañar al precio."
+        elif "deterior" in _mom or "empeor" in _mom:
+            mom_sub = "El tono de las noticias empeora; la narrativa juega en contra a corto plazo."
+        else:
+            mom_sub = "El tono de las noticias se mantiene estable, sin giros recientes."
+
+        _n_news = rd.get("news_count", 0) or 0
+        _tema = _clean_tile_value(narr_raw)
+        if _tema and _tema != "—":
+            narr_sub = (f"El foco de las {_n_news} noticias recientes está en {_tema.lower()}."
+                        if _n_news else f"La narrativa dominante gira en torno a {_tema.lower()}.")
+        else:
+            narr_sub = (f"{_n_news} noticias recientes, sin un tema dominante claro."
+                        if _n_news else "Sin noticias recientes que marquen una narrativa.")
+
+        _cont = cont_raw.lower()
+        if "buy the fear" in _cont or "miedo" in _cont:
+            cont_sub = "Miedo extremo: el pesimismo parece exagerado y suele preceder rebotes."
+        elif "sell the hype" in _cont or "euforia" in _cont:
+            cont_sub = "Euforia extrema: el optimismo ya está en el precio, conviene cautela."
+        else:
+            cont_sub = "Sin extremos de miedo ni euforia: el sentimiento no da señal contraria."
+
+        _rep = rep_raw.lower()
+        if "low" in _rep or "bajo" in _rep:
+            rep_sub = "Riesgo ESG y regulatorio bajo: sin frentes abiertos que amenacen la marca."
+        elif "high" in _rep or "alto" in _rep:
+            rep_sub = "Riesgo alto: hay frentes ESG o regulatorios que pueden dañar la valoración."
+        else:
+            rep_sub = "Riesgo moderado: conviene vigilar los frentes ESG y regulatorios abiertos."
+
+        _sent_pills = [
             {"label": "Momentum Sentimiento",
              "value": _clean_tile_value(mom_raw, max_len=14),
-             "level": mom_level, "sub": "Mejorando o deteriorando"},
+             "level": mom_level, "sub": mom_sub,
+         "tooltip": "Dirección en la que se mueve la percepción del mercado sobre la empresa en las últimas semanas: si la narrativa está mejorando o deteriorándose."},
             {"label": "Tema Narrativo",
              "value": _clean_tile_value(narr_raw, max_len=14),
              "level": "neutral",
-             "sub": f"{rd.get('news_count', 0)} noticias"},
+             "sub": narr_sub,
+         "tooltip": "Historia dominante que se cuenta hoy sobre la empresa en noticias y análisis. La narrativa mueve el precio a corto plazo aunque los fundamentales no hayan cambiado."},
             {"label": "Señal Contraria",
              "value": _clean_tile_value(cont_raw, max_len=14),
-             "level": cont_level, "sub": "Buy fear / Sell hype"},
+             "level": cont_level, "sub": cont_sub,
+         "tooltip": "Lectura a contracorriente del sentimiento. Comprar el miedo: el pesimismo es exagerado y crea oportunidad. Vender la euforia: el optimismo ya está descontado en el precio y queda poco recorrido."},
             {"label": "Riesgo Reputacional",
              "value": _clean_tile_value(rep_raw, max_len=10),
-             "level": rep_level, "sub": "ESG / regulatorio"},
-        ])
+             "level": rep_level, "sub": rep_sub,
+         "tooltip": "Exposición a escándalos, litigios, sanciones regulatorias o problemas ESG que puedan dañar la marca y, con ella, la valoración de la empresa."},
+        ]
+        # 2×2 en vez de una fila de cuatro: cada llamada abre sus propias
+        # columnas, así cada tarjeta ocupa la MITAD de esta columna (el doble de
+        # ancho que antes) y las frases de arriba caben cómodas.
+        _render_status_pills(_sent_pills[:2])
+        _render_status_pills(_sent_pills[2:])
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
@@ -2573,8 +2783,7 @@ def render_risk(analysis: StockAnalysis):
         st.markdown('<div class="section-title-bar">Upside / Downside vs Precio Actual</div>',
                     unsafe_allow_html=True)
         fig = _cached_rr_fig(current_price, _stop, _target, analysis.ticker)
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_risk_tab_rr_{analysis.ticker}")
+        _chart(fig, key=f"chart_risk_tab_rr_{analysis.ticker}")
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
@@ -2681,21 +2890,21 @@ def render_scan_results():
     # ── Top action bar: volver a filtros + volver al home ──
     col_filters, col_home, _spacer = st.columns([2, 2, 6])
     with col_filters:
-        if st.button("🔧 Ajustar filtros", key="scan_back_to_filters",
+        if st.button("Ajustar filtros", key="scan_back_to_filters",
                      use_container_width=True,
                      help="Volver al screener para modificar los filtros"):
             st.session_state.scanner_config_open = True
             st.session_state._show_scan_results = False
             st.rerun()
     with col_home:
-        if st.button("⌂ Volver al Home", key="scan_back_home",
+        if st.button("⌂ Volver al Inicio", key="scan_back_home",
                      use_container_width=True):
             st.session_state.scan_results = []
             st.session_state.current_scan_id = None
             st.session_state._show_scan_results = False
             st.rerun()
 
-    st.markdown("## 🌐 Resultados del Scan de Mercado")
+    st.markdown("## Resultados del Scan de Mercado")
     n = len(st.session_state.scan_results)
     st.markdown(f"*{n} candidatos pasaron los filtros del screener*")
 
@@ -2708,10 +2917,10 @@ def render_scan_results():
         # Mostrar SIEMPRE el diagnóstico para entender qué pasó
         if err:
             color = "#F1495F"
-            msg = f"❌ Error de TradingView: {err}"
+            msg = f"Error de TradingView: {err}"
         elif universe < 100:
             color = "#E2B25C"
-            msg = (f"⚠️ TradingView devolvió solo <strong>{universe} acciones</strong> "
+            msg = (f"TradingView devolvió solo <strong>{universe} acciones</strong> "
                    f"al universo crudo (esperábamos 1000+). De ellas, <strong>{passing}</strong> "
                    f"pasaron los filtros. Puede ser rate-limit transitorio — reintenta en 1-2 min.")
         else:
@@ -3110,7 +3319,7 @@ def render_scanner_config():
         with st.container():
             st.markdown('<div class="ejecutar-glow-anchor"></div>',
                         unsafe_allow_html=True)
-            if st.button("🚀 Ejecutar búsqueda", key="scanner_run",
+            if st.button("Ejecutar búsqueda", key="scanner_run",
                          use_container_width=True, type="primary"):
                 tech_filters = build_screener_filters(sf)
                 st.session_state.scanner_config_open = False
@@ -3191,13 +3400,12 @@ def render_quick_view(ticker: str):
     col_chart, col_metrics = st.columns([2, 1], gap="medium")
 
     with col_chart:
-        st.markdown('<div class="qv-section-title">📈 PRECIO 6 MESES</div>', unsafe_allow_html=True)
+        st.markdown('<div class="qv-section-title">PRECIO 6 MESES</div>', unsafe_allow_html=True)
         fig = _cached_quick_fig(ticker, period="1y")
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key=f"chart_quickview_price_{ticker}")
+        _chart(fig, key=f"chart_quickview_price_{ticker}")
 
     with col_metrics:
-        st.markdown('<div class="qv-section-title">📊 MÉTRICAS CLAVE</div>', unsafe_allow_html=True)
+        st.markdown('<div class="qv-section-title">MÉTRICAS CLAVE</div>', unsafe_allow_html=True)
 
         mcap = info.get("market_cap", 0) or 0
         if mcap >= 1e12:
@@ -3243,7 +3451,7 @@ def render_quick_view(ticker: str):
             """, unsafe_allow_html=True)
 
     # ── Row 2: Performance multi-timeframe ───────────────────────────
-    st.markdown('<div class="qv-section-title" style="margin-top:8px;">⚡ PERFORMANCE</div>', unsafe_allow_html=True)
+    st.markdown('<div class="qv-section-title" style="margin-top:8px;">PERFORMANCE</div>', unsafe_allow_html=True)
     perf_cols = st.columns(6, gap="small")
     range_pct = ((current_price - low_52w) / (high_52w - low_52w) * 100) if (high_52w - low_52w) > 0 else 50
 
@@ -3283,7 +3491,7 @@ def render_quick_view(ticker: str):
     col_news, col_ctx = st.columns([2, 1], gap="medium")
 
     with col_news:
-        st.markdown('<div class="qv-section-title" style="margin-top:14px;">📰 NOTICIAS RECIENTES</div>', unsafe_allow_html=True)
+        st.markdown('<div class="qv-section-title" style="margin-top:14px;">NOTICIAS RECIENTES</div>', unsafe_allow_html=True)
         if news:
             for item in news[:5]:
                 publisher = item.get("publisher", "—")
@@ -3308,7 +3516,7 @@ def render_quick_view(ticker: str):
             st.markdown('<div class="qv-empty">Sin noticias recientes disponibles</div>', unsafe_allow_html=True)
 
     with col_ctx:
-        st.markdown('<div class="qv-section-title" style="margin-top:14px;">🏭 CONTEXTO</div>', unsafe_allow_html=True)
+        st.markdown('<div class="qv-section-title" style="margin-top:14px;">CONTEXTO</div>', unsafe_allow_html=True)
 
         sector = info.get("sector", "—") or "—"
         industry = info.get("industry", "—") or "—"
@@ -3346,7 +3554,7 @@ def render_quick_view(ticker: str):
     _, cta_col, _ = st.columns([1, 2, 1])
     with cta_col:
         if st.button(
-            f"🔍  EJECUTAR ANÁLISIS DLP DE {ticker}",
+            f"EJECUTAR ANÁLISIS DLP DE {ticker}",
             use_container_width=True,
             key="qv_full_analysis",
             type="primary",
@@ -3389,7 +3597,7 @@ def render_welcome():
         # 30% más de ancho porque su texto es más largo. Garantiza que quepa.
         btn_col1, btn_col2 = st.columns([1, 1.3], gap="small")
         with btn_col1:
-            analyze_btn = st.button("🔍  Análisis DLP", use_container_width=True, key="hero_analyze", type="primary")
+            analyze_btn = st.button("Análisis DLP", use_container_width=True, key="hero_analyze", type="primary")
         with btn_col2:
             scan_btn = st.button("Escanear el Mercado", use_container_width=True, key="hero_scan", type="primary")
 
@@ -3553,8 +3761,7 @@ def render_welcome():
         # Quitar el spinner — vamos a renderizar el heatmap abajo
         sector_loader.empty()
 
-        st.plotly_chart(fig, use_container_width=True, config={"displayModeBar": False},
-                        key="chart_welcome_sector_heatmap")
+        _chart(fig, key="chart_welcome_sector_heatmap")
 
 
 # ── Main App ──────────────────────────────────────────────────────────────
@@ -3572,7 +3779,7 @@ def main():
 
     render_header()
 
-    # El botón "Volver al Home" del top-nav. Cuando hay un ticker
+    # El botón "Volver al Inicio" del top-nav. Cuando hay un ticker
     # seleccionado, ese botón sale en la MISMA franja horizontal que el
     # botón "Descargar PDF" (rendereado más abajo en el flujo de análisis);
     # por eso aquí solo lo mostramos cuando NO hay análisis seleccionado.
@@ -3621,7 +3828,7 @@ def main():
 
     _col_home, _col_mid, _col_pdf = st.columns([2, 3, 2])
     with _col_home:
-        if st.button("⌂  Volver al Home", use_container_width=True,
+        if st.button("⌂  Volver al Inicio", use_container_width=True,
                      key="topnav_home_btn"):
             st.session_state.selected_ticker = None
             st.session_state.quick_view_ticker = None
@@ -3657,7 +3864,7 @@ def main():
     rec_badge = get_recommendation_badge(analysis.recommendation)
     score = analysis.composite_score
     color = score_color(score)
-    compound_badge = ('<span class="compound-machine-badge">💎 COMPOUNDER</span>'
+    compound_badge = ('<span class="compound-machine-badge">COMPOUNDER</span>'
                       if getattr(analysis, "is_compound_machine", False) else "")
 
     st.markdown(
