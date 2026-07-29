@@ -3879,41 +3879,49 @@ def main():
         unsafe_allow_html=True,
     )
 
-    # Tabs principales
-    tabs = st.tabs([
-        "Overview",
-        "Técnico",
-        "Fundamentales",
-        "Futuro",
-        "Smart Money",
-        "Contexto del Mercado",
-        "Riesgo",
-    ])
+    # ── Barra de secciones (estilo APP-PROYECCION-PORTAFOLIO) ────────────────
+    # Radio horizontal CENTRADO como píldora: cada opción lleva su puntito y la
+    # activa se marca con borde redondeado dorado + brillo (CSS .st-key-sectbar_).
+    # Sustituye a st.tabs manteniendo INTACTAS todas las render functions. Con
+    # key POR TICKER cada análisis recuerda en qué sección estabas (st.tabs no
+    # acepta key y se reiniciaba al cambiar de acción).
+    sections = ["Overview", "Técnico", "Fundamentales", "Futuro",
+                "Smart Money", "Contexto del Mercado", "Riesgo"]
+    # El key del container se vuelve clase CSS (st-key-…): solo chars seguros
+    # (tickers como BRK.B llevarían un punto inválido en un class name).
+    _tk_safe = "".join(c if (c.isalnum() or c in "_-") else "_" for c in analysis.ticker)
+    sect_key = f"sect_{analysis.ticker}"
+    if st.session_state.get(sect_key) not in sections:
+        st.session_state[sect_key] = sections[0]
+    with st.container(key=f"sectbar_{_tk_safe}"):
+        st.radio("Sección", sections, key=sect_key, horizontal=True,
+                 label_visibility="collapsed")
+    sect = st.session_state.get(sect_key) or sections[0]
 
-    with tabs[0]:
+    if sect == "Overview":
         render_overview(analysis)
-    with tabs[1]:
+    elif sect == "Técnico":
         render_technical(analysis)
-    with tabs[2]:
+    elif sect == "Fundamentales":
         render_fundamentals(analysis)
-    with tabs[3]:
+    elif sect == "Futuro":
         render_future(analysis)
-    with tabs[4]:
+    elif sect == "Smart Money":
         render_institutional(analysis)
-    with tabs[5]:
+    elif sect == "Contexto del Mercado":
         # Contexto del Mercado = Catalizadores + Macro + Sentimiento.
         # Cada render function se mantiene INTACTA (todas sus gráficas/tiles/gauge).
         # Los 3 reportes vienen ahora del agente combinado market_context, pero con
         # estructura idéntica, así que cada render sigue leyendo reports["catalysts"],
         # reports["macro"] y reports["sentiment"] sin cambios.
         render_catalysts(analysis)
-        st.markdown('<div style="margin:28px 0;border-top:1px solid #1E2530;"></div>',
+        st.markdown('<div style="margin:28px 0;border-top:1px solid #232830;"></div>',
                     unsafe_allow_html=True)
         render_macro(analysis)
-        st.markdown('<div style="margin:28px 0;border-top:1px solid #1E2530;"></div>',
+        st.markdown('<div style="margin:28px 0;border-top:1px solid #232830;"></div>',
                     unsafe_allow_html=True)
         render_sentiment(analysis)
-    with tabs[6]:
+    elif sect == "Riesgo":
         render_risk(analysis)
 
 
