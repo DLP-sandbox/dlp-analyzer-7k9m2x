@@ -1650,6 +1650,11 @@ def render_overview(analysis: StockAnalysis):
         )
 
     with col_snow:
+        # ÚNICA gráfica con hover: al pasar el ratón por un vértice — o por el
+        # texto de la categoría/calificación — sale un pop-up con la nota en
+        # grande. Funciona porque STATIC_CHART_CONFIG NO usa `staticPlot` (que
+        # mataría también el hover); el zoom y el arrastre siguen bloqueados por
+        # dragmode=False + sin scrollZoom/doubleClick que aplica _chart().
         fig = _cached_snowflake_fig(analysis.snowflake)
         _chart(fig, key=f"chart_overview_snowflake_{analysis.ticker}")
 

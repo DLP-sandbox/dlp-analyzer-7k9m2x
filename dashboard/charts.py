@@ -540,27 +540,53 @@ def build_snowflake(snowflake: dict) -> go.Figure:
         fill_color = "rgba(241,73,95,0.15)"
         line_color = RED
 
-    # Labels combinados: "Calidad 15" — el valor va al lado del nombre en el
-    # outer ring, COLOREADO por su propio score (valor 0-20 → escala 0-100 →
-    # _score_color): de un vistazo se ve qué dimensión es fuerte o débil.
+    # Etiqueta en DOS LÍNEAS: el nombre arriba y, DEBAJO, la calificación en
+    # número grande coloreado por su propio score (valor 0-20 → escala 0-100 →
+    # _score_color). Así se lee de un vistazo qué dimensión es fuerte o débil,
+    # y al ir apiladas ocupan mucho menos ancho → no se cortan en los extremos.
     combined = [
-        f"{labels[i]}  <b><span style='color:{_score_color(values[i] * 5)}'>{int(values[i])}</span></b>"
+        f"<span style='font-size:11px'>{labels[i]}</span><br>"
+        f"<b><span style='font-size:17px;color:{_score_color(values[i] * 5)}'>{int(values[i])}</span></b>"
+        f"<span style='font-size:9px;color:{MUTED}'>/20</span>"
         for i in range(len(labels))
     ]
     combined_closed = combined + [combined[0]]
 
     fig = go.Figure()
 
+    # customdata (nombre limpio, valor /20 y equivalente /100) — lo comparten la
+    # traza de datos y la del borde exterior, para que el pop-up sea idéntico
+    # se pase el ratón por el vértice o por la ETIQUETA.
+    _cd = [[labels[i], int(values[i]), int(round(values[i] * 5))] for i in range(len(labels))]
+    _cd_closed = _cd + [_cd[0]]
+    _HOVER_TPL = (
+        "<span style='font-size:11px;color:#8D949E;letter-spacing:0.08em'>"
+        "%{customdata[0]}</span><br>"
+        "<span style='font-size:7px'> </span><br>"
+        "<b><span style='font-size:23px'>%{customdata[1]}</span></b>"
+        "<span style='font-size:12px;color:#8D949E'>/20</span>"
+        "   <span style='font-size:11px;color:#8D949E'>· %{customdata[2]}/100</span>"
+        "<extra></extra>"
+    )
+
     # Área de fondo (escala máxima) — disco CON PRESENCIA sobre el panel negro:
     # el pentágono de referencia debe VERSE (fondo + contorno definidos).
+    # Sus vértices están en la MISMA dirección que cada etiqueta, así que se les
+    # da el mismo pop-up: junto con hoverdistance (abajo), pasar el ratón por el
+    # texto de la categoría/calificación muestra el tooltip igual que en la
+    # gráfica. Los marcadores van invisibles (solo zona de hover).
     fig.add_trace(go.Scatterpolar(
         r=[20] * len(combined_closed),
         theta=combined_closed,
+        customdata=_cd_closed,
         fill="toself",
         fillcolor="rgba(255,255,255,0.045)",
         line=dict(color="rgba(255,255,255,0.16)", width=1.4),
+        mode="lines+markers",
+        marker=dict(size=26, color="rgba(0,0,0,0)"),
         showlegend=False,
-        hoverinfo="skip",
+        hoveron="points",          # sin hover del relleno (salía "trace 2")
+        hovertemplate=_HOVER_TPL,
     ))
 
     # Underlay de PROFUNDIDAD (no neón): la misma silueta con trazo ancho a muy
@@ -579,47 +605,85 @@ def build_snowflake(snowflake: dict) -> go.Figure:
     fig.add_trace(go.Scatterpolar(
         r=values_closed,
         theta=combined_closed,
+        customdata=_cd_closed,
         fill="toself",
         fillcolor=fill_color,
         line=dict(color=line_color, width=2.5),
         mode="lines+markers",
         marker=dict(size=9, color=line_color, line=dict(color=PANEL_BG, width=2)),
         showlegend=False,
-        hovertemplate="<b>%{theta}</b><br>Score: %{r}/20<extra></extra>",
+        # Pop-up: categoría arriba en mono espaciado y la calificación DEBAJO en
+        # grande, con su equivalente sobre 100. Misma identidad visual que el
+        # resto de la app (mono + oro/termómetro sobre superficie oscura).
+        hovertemplate=_HOVER_TPL,
+    ))
+
+    # Etiquetas como TRAZA DE TEXTO dentro del área polar: así el pop-up sale
+    # también al pasar el ratón por el nombre o la calificación.
+    _ang = [90 - i * (360 / len(labels)) for i in range(len(labels))]
+    fig.add_trace(go.Scatterpolar(
+        r=[23.2] * len(labels),
+        theta=combined,          # mismas categorías (posición angular)
+        customdata=_cd,
+        mode="markers+text",
+        text=combined,
+        textposition="middle center",
+        textfont=dict(size=11, color=TEXT, family="Inter"),
+        marker=dict(size=34, color="rgba(0,0,0,0)"),
+        showlegend=False,
+        hoveron="points",
+        hovertemplate=_HOVER_TPL,
+        cliponaxis=False,
     ))
 
     fig.update_layout(
         polar=dict(
-            # domain simétrico → el radar queda CENTRADO en su tarjeta (antes se
-            # veía desplazado a la izquierda). Un pelín más grande con más height.
-            domain={"x": [0.0, 1.0], "y": [0.0, 1.0]},
+            # Domain ENCOGIDO y simétrico: deja un cinturón libre alrededor del
+            # disco para que las etiquetas (nombre + calificación) quepan SIEMPRE
+            # DENTRO del recuadro de la gráfica, sin cortarse en los extremos.
+            domain={"x": [0.04, 0.96], "y": [0.03, 0.97]},
             bgcolor="#0B0D11",          # disco algo más claro que el panel: se VE
             radialaxis=dict(
-                range=[0, 22],
-                showticklabels=False,   # Sin 5/10/15/20 — el valor está en el angular label
+                # El rango llega a 28 pero SOLO se dibujan anillos hasta 20: el
+                # área activa (donde Plotly escucha el ratón) se extiende más
+                # allá del disco visible, de modo que las etiquetas caen DENTRO
+                # y también responden al hover.
+                range=[0, 28],
+                showticklabels=False,   # Sin 5/10/15/20 — el valor va en la etiqueta
                 showline=False,
                 gridcolor="rgba(255,255,255,0.09)",   # anillos visibles
-                dtick=5,                # 4 anillos: lectura de escala clara
+                tickvals=[5, 10, 15, 20],
             ),
             angularaxis=dict(
+                # Las etiquetas ya NO son ticks del eje (quedaban FUERA del área
+                # que Plotly escucha y no se podía hacer hover sobre el texto):
+                # se dibujan como una traza de texto DENTRO del área polar.
+                showticklabels=False,
                 tickfont=dict(size=11, color=TEXT, family="Inter"),
-                gridcolor="rgba(255,255,255,0.07)",   # radios visibles
-                linecolor="rgba(255,255,255,0.14)",   # aro exterior definido
+                gridcolor="rgba(255,255,255,0.05)",   # radios sutiles
+                linecolor="rgba(0,0,0,0)",           # sin aro exterior visible
             ),
         ),
         paper_bgcolor=PANEL_BG,
         font=dict(color=TEXT),
-        height=372,
-        margin=dict(l=44, r=44, t=54, b=44),
+        height=410,                                    # más alto: cabe todo holgado
+        margin=dict(l=10, r=10, t=46, b=16),           # el aire lo da el domain
         title=dict(
             text="<b>PERFIL DE CALIDAD</b>",
             font=dict(color=MUTED, size=11, family="JetBrains Mono"),
             x=0.5,
         ),
+        # Solo se resalta el punto más cercano (nada de tooltips múltiples).
+        hovermode="closest",
+        # Alcance amplio del hover: permite que el pop-up salga también al pasar
+        # el ratón por el TEXTO de la categoría/calificación, que queda algo por
+        # fuera del aro (el punto más cercano es siempre el de su propio radio).
+        hoverdistance=52,
         hoverlabel=dict(
-            bgcolor="#15181D",
-            bordercolor=line_color,
-            font=dict(size=11, color=TEXT, family="JetBrains Mono"),
+            bgcolor="#12151A",
+            bordercolor="rgba(226,178,92,0.55)",
+            font=dict(size=13, color=TEXT, family="JetBrains Mono"),
+            align="left",
         ),
         showlegend=False,
     )
@@ -687,7 +751,7 @@ def build_score_breakdown(score_breakdown: dict) -> go.Figure:
             cornerradius=BAR_RADIUS,
         ),
         showlegend=False,
-        hovertemplate="<b>%{y}</b><br>Score: %{x:.0f}/100<extra></extra>",
+        hoverinfo="skip",
         width=0.5,
     ))
 
@@ -745,9 +809,9 @@ def build_score_breakdown(score_breakdown: dict) -> go.Figure:
         ),
         showlegend=False,
         margin=dict(l=10, r=16, t=40, b=20),
-        hovermode="y unified",
-        hoverlabel=dict(bgcolor="#15181D", bordercolor="rgba(226,178,92,0.3)",
-                        font=dict(size=11, family="JetBrains Mono", color=TEXT)),
+        # Sin tooltip: el radar del Overview es la ÚNICA gráfica con pop-up al
+        # pasar el ratón. Aquí las calificaciones ya se leen en el panel derecho.
+        hovermode=False,
     )
 
     return fig
