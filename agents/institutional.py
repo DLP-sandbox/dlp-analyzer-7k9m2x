@@ -104,20 +104,41 @@ class InstitutionalAgent(BaseAgent):
         lines.append("")
 
         # Insider transactions
+        # Se leen las claves en MINÚSCULA (formato normalizado de la capa de
+        # datos, común a yfinance y al respaldo de Nasdaq) con respaldo a las
+        # MAYÚSCULAS del formato antiguo, para que un caché viejo siga
+        # funcionando. Sin esta tolerancia el agente recibía "Unknown" en todo.
         insider_buys = holders.get("recent_insider_buys", 0)
+        insider_sells = holders.get("recent_insider_sells", 0)
         insider_txns = holders.get("insider_transactions", [])
+
+        def _g(txn, *keys, default=""):
+            for k in keys:
+                v = txn.get(k)
+                if v not in (None, ""):
+                    return v
+            return default
 
         lines.append(f"## Transacciones de Insiders (últimas 20)")
         lines.append(f"**Compras recientes de insiders:** {insider_buys}")
+        lines.append(f"**Ventas recientes de insiders:** {insider_sells}")
 
         if insider_txns:
             for txn in insider_txns[:10]:
-                date = str(txn.get("Date", ""))[:10]
-                insider = txn.get("Insider", "Unknown")
-                pos = txn.get("Position", "")
-                shares = txn.get("Shares", 0)
-                val = txn.get("Value", 0)
-                lines.append(f"- {date} | {insider} ({pos}): {shares:,} shares | ${val:,.0f}")
+                date = str(_g(txn, "date", "Date"))[:10]
+                insider = _g(txn, "insider", "Insider", default="Unknown")
+                pos = _g(txn, "position", "Position")
+                tipo = _g(txn, "type", "Transaction")
+                try:
+                    shares = float(_g(txn, "shares", "Shares", default=0) or 0)
+                except (TypeError, ValueError):
+                    shares = 0.0
+                try:
+                    val = float(_g(txn, "value", "Value", default=0) or 0)
+                except (TypeError, ValueError):
+                    val = 0.0
+                tipo_str = f" [{tipo}]" if tipo else ""
+                lines.append(f"- {date} | {insider} ({pos}){tipo_str}: {shares:,.0f} shares | ${val:,.0f}")
 
         lines += [
             "",

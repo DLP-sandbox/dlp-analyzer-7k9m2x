@@ -224,6 +224,7 @@ def init_state():
         # Scanner personalizable
         "scanner_config_open": False,                # mostrar página de configuración
         "scanner_filters":     dict(SCANNER_DEFAULTS),  # selección UI actual
+        "sidebar_collapsed":   False,                # columna lateral minimizada
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -487,6 +488,28 @@ def inject_protection():
             } catch (e) {}
         }
 
+        // Oculta el "resize handle" del borde del sidebar (parecía arrastrable
+        // pero el ancho está fijado, así que solo confundía). Robusto: busca
+        // cualquier elemento dentro del sidebar cuyo cursor CALCULADO sea de
+        // redimensionar y lo oculta — no depende de la clase ofuscada de
+        // Streamlit, que cambia entre versiones. Refuerza la regla CSS.
+        function hideSidebarResizer(d) {
+            try {
+                if (!d) return;
+                var sb = d.querySelector('[data-testid="stSidebar"]');
+                if (!sb) return;
+                var view = d.defaultView || window;
+                var els = sb.querySelectorAll('div');
+                for (var i = 0; i < els.length; i++) {
+                    var cur = '';
+                    try { cur = view.getComputedStyle(els[i]).cursor; } catch (e) {}
+                    if (cur === 'col-resize' || cur === 'ew-resize') {
+                        els[i].style.display = 'none';
+                    }
+                }
+            } catch (e) {}
+        }
+
         // Nukear en todos los documentos accesibles: el propio y window.top
         function nukeEverywhere() {
             nukeBranding(doc);
@@ -494,6 +517,10 @@ def inject_protection():
             try { if (window.parent && window.parent.document) nukeBranding(window.parent.document); } catch (e) {}
             // El contenido de la app vive en el documento padre, no en este iframe.
             try { if (window.parent && window.parent.document) fitText(window.parent.document); } catch (e) {}
+            // El sidebar también vive en el padre; se pasa el doc explícitamente
+            // (y el propio como respaldo) para no depender de dónde se ejecute.
+            try { if (window.parent && window.parent.document) hideSidebarResizer(window.parent.document); } catch (e) {}
+            hideSidebarResizer(doc);
         }
 
         nukeEverywhere();
@@ -623,6 +650,13 @@ def render_sidebar():
                 <div class="sidebar-brand-sub">MARKET ANALYZER</div>
             </div>
             """, unsafe_allow_html=True)
+
+        # ── Botón minimizar columna — el CSS lo posiciona (absoluto) sobre
+        #    la misma línea del logo, arriba a la derecha. ─────────────────
+        if st.button("«", key="sidebar_collapse_btn",
+                     help="Minimizar la columna"):
+            st.session_state.sidebar_collapsed = True
+            st.rerun()
 
         # ── Home ─────────────────────────────────────────────────────────
         if st.button("⌂  Volver al Inicio", use_container_width=True,
@@ -1104,6 +1138,23 @@ def _render_agent_header(report):
     """, unsafe_allow_html=True)
 
 
+def _md_safe(text):
+    """Neutraliza lo que Streamlit interpretaría como fórmula matemática.
+
+    Streamlit procesa el MARKDOWN antes de insertar el HTML, y trata `$…$` como
+    LaTeX (KaTeX). Un texto de la IA con dos importes — p.ej. "FCF de $7.83B" y
+    "target ($168.19)" — hacía que TODO lo que hay entre ambos se renderizara
+    como ecuación: el párrafo salía descompuesto en letras sueltas en vertical.
+
+    Se sustituye el `$` por su entidad HTML: el procesador de markdown ya no ve
+    un delimitador (así que nunca abre modo matemática) y el navegador la pinta
+    como un "$" normal. Se aplica SOLO al pintar — no muta el dato guardado, de
+    modo que los análisis ya almacenados se ven bien sin reprocesarlos."""
+    if text is None:
+        return ""
+    return str(text).replace("$", "&#36;")
+
+
 def _strip_ui_emoji(text):
     """Quita emojis decorativos al inicio de un título de UI (el texto queda)."""
     import re as _re
@@ -1155,7 +1206,7 @@ def _render_metric_tiles(metrics):
                     <span class="kpi-tile-label">{m['label']}</span>
                     {help_html}
                 </div>
-                <div class="kpi-tile-value" style="color:{m['color']};">{m['value']}</div>
+                <div class="kpi-tile-value" style="color:{m['color']};">{_md_safe(m['value'])}</div>
                 {_meter_html(m.get('meter'))}
             </div>
             """, unsafe_allow_html=True)
@@ -1198,7 +1249,7 @@ def _signal_card_html(title, items, kind):
     """Tarjeta única que agrupa las señales (kind = 'pos'|'neg')."""
     cls = "strength-item" if kind == "pos" else "risk-item"
     title_cls = "strength" if kind == "pos" else "risk"
-    rows = "".join(f'<div class="{cls}">{i}</div>' for i in items)
+    rows = "".join(f'<div class="{cls}">{_md_safe(i)}</div>' for i in items)
     return (f'<div class="signal-card signal-card--{kind}">'
             f'<div class="thesis-section-title {title_cls}">{_strip_ui_emoji(title)}</div>'
             f'{rows}</div>')
@@ -1232,7 +1283,7 @@ def _render_analysis_card(report, title="Análisis Detallado"):
         return
     st.markdown(f'<div class="section-title-bar">{_strip_ui_emoji(title)}</div>', unsafe_allow_html=True)
     st.markdown(
-        f'<div class="analysis-card"><div class="analysis-text">{analysis_text}</div></div>',
+        f'<div class="analysis-card"><div class="analysis-text">{_md_safe(analysis_text)}</div></div>',
         unsafe_allow_html=True,
     )
 
@@ -1247,7 +1298,7 @@ def _render_insight_card(title, content, color="#E2B25C", icon="💡"):
         <div class="insight-card-header">
             <span class="insight-card-title" style="color:{color};">{_strip_ui_emoji(title)}</span>
         </div>
-        <div class="insight-card-body">{content}</div>
+        <div class="insight-card-body">{_md_safe(content)}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1572,8 +1623,10 @@ def _extract_percent(value):
 
 # ── Overview Tab ──────────────────────────────────────────────────────────
 def render_overview(analysis: StockAnalysis):
-    # Fila 1: Gauge + Snowflake + Score breakdown
-    col_gauge, col_snow, col_bar = st.columns([1.2, 1, 1.5])
+    # Fila 1: Gauge (tacómetro) + Snowflake (radar), lado a lado y bien
+    # proporcionados. El desglose de barras baja a su propia fila (abajo) para
+    # que ninguna de las tres se solape ni se corte.
+    col_gauge, col_snow = st.columns([1, 1], gap="medium")
 
     with col_gauge:
         fig = _cached_gauge_fig(analysis.composite_score, analysis.recommendation)
@@ -1600,9 +1653,20 @@ def render_overview(analysis: StockAnalysis):
         fig = _cached_snowflake_fig(analysis.snowflake)
         _chart(fig, key=f"chart_overview_snowflake_{analysis.ticker}")
 
-    with col_bar:
-        fig = _cached_breakdown_fig(analysis.score_breakdown)
-        _chart(fig, key=f"chart_overview_breakdown_{analysis.ticker}")
+    # Fila 2: Desglose por análisis (barras) a todo el ancho, para que se lean
+    # completas las 8 barras sin recortes.
+    # Reconstruimos el desglose desde los REPORTES reales para que cada barra
+    # (incluida Riesgo) coincida SIEMPRE con su sección — también en análisis
+    # antiguos cargados de disco cuyo score_breakdown guardado no incluía el
+    # riesgo (antes mostraba 50 fijo).
+    breakdown = dict(analysis.score_breakdown or {})
+    for _k in ("fundamentals", "technical", "future", "institutional",
+               "catalysts", "macro", "sentiment", "risk"):
+        _rep = analysis.reports.get(_k)
+        if _rep is not None:
+            breakdown[_k] = _rep.score
+    fig = _cached_breakdown_fig(breakdown)
+    _chart(fig, key=f"chart_overview_breakdown_{analysis.ticker}")
 
     st.markdown("---")
 
@@ -1624,7 +1688,7 @@ def render_overview(analysis: StockAnalysis):
             st.markdown(
                 f'<div class="overview-info-row">'
                 f'<span class="overview-info-key">{k}</span>'
-                f'<span class="overview-info-value">{v}</span>'
+                f'<span class="overview-info-value">{_md_safe(v)}</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -1680,7 +1744,7 @@ def render_overview(analysis: StockAnalysis):
                         <span class="kpi-tile-label">{m['label']}</span>
                         <span class="kpi-help" data-tooltip="{m['tooltip']}">?</span>
                     </div>
-                    <div class="kpi-tile-value" style="color:{m['color']};">{m['value']}</div>
+                    <div class="kpi-tile-value" style="color:{m['color']};">{_md_safe(m['value'])}</div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -1708,7 +1772,7 @@ def render_overview(analysis: StockAnalysis):
     with col_thesis:
         st.markdown("#### Tesis de Inversión")
         st.markdown(
-            f'<div class="analysis-card"><div class="analysis-text">{analysis.investment_thesis}</div></div>',
+            f'<div class="analysis-card"><div class="analysis-text">{_md_safe(analysis.investment_thesis)}</div></div>',
             unsafe_allow_html=True,
         )
 
@@ -1763,7 +1827,7 @@ def render_overview(analysis: StockAnalysis):
                     <span class="alpha-opportunity-icon">⚡</span>
                     <span class="alpha-opportunity-title">Oportunidad Asimétrica</span>
                 </div>
-                <div class="alpha-opportunity-body">{analysis.alpha_opportunity}</div>
+                <div class="alpha-opportunity-body">{_md_safe(analysis.alpha_opportunity)}</div>
             </div>
             """, unsafe_allow_html=True)
 
@@ -2334,6 +2398,73 @@ def render_institutional(analysis: StockAnalysis):
         fig = build_holders_bars(top_inst)
         _chart(fig, key=f"chart_inst_holders_{analysis.ticker}")
 
+    # ── Actividad reciente de directivos (Insiders) ─────────────────────────
+    # Si el análisis cacheado no trae las transacciones (se guardó antes de esta
+    # sección, o los datos venían rate-limitados), se usan las frescas de
+    # _cached_holders — que cachea 12h y tiene respaldo Nasdaq, así que la tabla
+    # SIEMPRE tiene de dónde dibujar. Nunca sobrescribe datos buenos.
+    insider_txns = holders_raw.get("insider_transactions") or []
+    n_buys  = holders_raw.get("recent_insider_buys", 0) or 0
+    n_sells = holders_raw.get("recent_insider_sells", 0) or 0
+    if not insider_txns:
+        insider_txns = _hold.get("insider_transactions") or []
+        n_buys  = _hold.get("recent_insider_buys", 0) or 0
+        n_sells = _hold.get("recent_insider_sells", 0) or 0
+
+    if insider_txns:
+        st.markdown('<div class="section-title-bar">Actividad Reciente de Directivos (Insiders)</div>',
+                    unsafe_allow_html=True)
+        st.markdown(
+            f"<div style='margin:-4px 0 10px;color:#8D949E;font-size:0.85rem;'>"
+            f"En las últimas operaciones registradas: "
+            f"<span style='color:#3DD68C;font-weight:700;'>{n_buys} compras</span> · "
+            f"<span style='color:#F1495F;font-weight:700;'>{n_sells} ventas</span>. "
+            f"Las compras de directivos con su propio dinero suelen ser la señal más valiosa "
+            f"(arriesgan su patrimonio apostando a que la acción sube); las ventas casi siempre "
+            f"son por liquidez personal y pesan mucho menos.</div>",
+            unsafe_allow_html=True)
+
+        def _fmt_usd(v):
+            v = abs(float(v or 0))
+            if v >= 1e9: return f"${v/1e9:.1f}B"
+            if v >= 1e6: return f"${v/1e6:.1f}M"
+            if v >= 1e3: return f"${v/1e3:.0f}K"
+            return f"${v:.0f}" if v else "—"
+
+        # Priorizar operaciones con dinero real (las más grandes primero)
+        con_valor = [t for t in insider_txns if (t.get("value") or 0) > 0]
+        muestra = sorted(con_valor, key=lambda t: t.get("value") or 0, reverse=True)[:6] or insider_txns[:6]
+
+        tipo_color = {"compra": "#3DD68C", "venta": "#F1495F",
+                      "concesión": "#6FA3E0", "donación": "#9D8CE0", "otra": "#5E6570"}
+        rows = ""
+        for t in muestra:
+            c = tipo_color.get(t.get("type", "otra"), "#5E6570")
+            nombre = (t.get("insider") or "—").title()
+            # _md_safe en el importe: son hasta 6 celdas con "$" en el MISMO
+            # bloque de markdown → sin escapar, Streamlit los emparejaría como
+            # fórmula LaTeX y descuadraría la tabla entera.
+            rows += (
+                f"<tr>"
+                f"<td style='padding:7px 10px;color:#C9CDD3;font-size:0.82rem;'>{t.get('date','')}</td>"
+                f"<td style='padding:7px 10px;color:#F2F3F5;font-size:0.82rem;font-weight:600;'>{nombre}</td>"
+                f"<td style='padding:7px 10px;color:#8D949E;font-size:0.78rem;'>{t.get('position','')}</td>"
+                f"<td style='padding:7px 10px;'><span style='color:{c};font-weight:700;font-size:0.78rem;text-transform:uppercase;'>{t.get('type','')}</span></td>"
+                f"<td style='padding:7px 10px;text-align:right;color:#C9CDD3;font-size:0.82rem;font-family:JetBrains Mono,monospace;'>{_md_safe(_fmt_usd(t.get('value')))}</td>"
+                f"</tr>"
+            )
+        _th = ("padding:8px 10px;text-align:left;color:#5E6570;font-size:0.70rem;"
+               "text-transform:uppercase;letter-spacing:0.05em;")
+        st.markdown(
+            f"<div style='border:1px solid rgba(255,255,255,0.07);border-radius:12px;overflow:hidden;margin-bottom:14px;'>"
+            f"<table style='width:100%;border-collapse:collapse;'>"
+            f"<thead><tr style='background:rgba(255,255,255,0.03);'>"
+            f"<th style='{_th}'>Fecha</th><th style='{_th}'>Directivo</th>"
+            f"<th style='{_th}'>Cargo</th><th style='{_th}'>Operación</th>"
+            f"<th style='{_th}text-align:right;'>Monto</th>"
+            f"</tr></thead><tbody>{rows}</tbody></table></div>",
+            unsafe_allow_html=True)
+
     # ── Smart Money Signal pill grande ──
     smart_raw = km.get("smart_money_signal") or "neutral"
     smart_display = _translate_status(smart_raw).upper()
@@ -2835,7 +2966,7 @@ def render_agent_tab(analysis: StockAnalysis, agent_key: str):
     with col_conv:
         st.markdown(f"#### {icon} {report.agent_name}")
         st.markdown(
-            f'<div class="analysis-card"><div class="analysis-text">{report.analysis}</div></div>',
+            f'<div class="analysis-card"><div class="analysis-text">{_md_safe(report.analysis)}</div></div>',
             unsafe_allow_html=True,
         )
 
@@ -3764,6 +3895,25 @@ def render_welcome():
         _chart(fig, key="chart_welcome_sector_heatmap")
 
 
+def _apply_sidebar_collapse():
+    """Si la columna está minimizada: la oculta (el contenido principal se
+    reajusta solo) y muestra un botón «»» arriba a la izquierda para reabrirla.
+    Puramente visual — no toca ningún dato ni flujo; el sidebar se sigue
+    renderizando (estado intacto), solo se oculta con CSS."""
+    if not st.session_state.get("sidebar_collapsed"):
+        return
+    # Ocultar el sidebar. Mayor especificidad (body …) para ganar al ancho fijo.
+    st.markdown(
+        "<style>body [data-testid='stSidebar'],"
+        "body section[data-testid='stSidebar']{display:none !important;}</style>",
+        unsafe_allow_html=True,
+    )
+    # Botón para reabrir (arriba a la izquierda, fijo vía CSS).
+    if st.button("»", key="sidebar_expand_btn", help="Mostrar la columna"):
+        st.session_state.sidebar_collapsed = False
+        st.rerun()
+
+
 # ── Main App ──────────────────────────────────────────────────────────────
 def main():
     # Puerta de contraseña — primera cosa que se evalúa. Si la app está
@@ -3776,6 +3926,7 @@ def main():
     # Se renderiza SIEMPRE en cada vista; el contenido viene de disco así
     # que sobrevive a reinicios de la app.
     render_sidebar()
+    _apply_sidebar_collapse()
 
     render_header()
 

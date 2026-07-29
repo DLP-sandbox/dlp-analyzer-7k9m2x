@@ -1128,6 +1128,107 @@ def get_relative_strength(ticker: str, benchmark: str = "SPY", period: str = "1y
 
 # ── Holders e institucionales ──────────────────────────────────────────────
 
+def _get_institutional_from_nasdaq(ticker: str) -> dict:
+    """Fallback de holders INSTITUCIONALES vía Nasdaq cuando yfinance falla
+    (bloqueado en IPs de datacenter — así se guardaron análisis sin la gráfica
+    de Propiedad Institucional en producción). Devuelve
+    {top_institutions: [{"Holder", "% Out"}], institutional_ownership_pct} en el
+    MISMO formato que consume build_holders_bars. NUNCA lanza.
+
+    OJO: el endpoint se llama SIN query string — con parámetros (?limit=…)
+    api.nasdaq.com responde 200 pero con cuerpo no-JSON. Probado en vivo.
+    Tickers de clase: Nasdaq usa punto (BRK.B), no el guion de yfinance."""
+    variants = [ticker.upper()]
+    if "-" in ticker:
+        variants.append(ticker.upper().replace("-", "."))
+    for tk in variants:
+        try:
+            data = _nasdaq_json(f"/api/company/{tk}/institutional-holdings")
+            if not data:
+                continue
+            rows = (((data.get("holdingsTransactions") or {}).get("table") or {})
+                    .get("rows") or [])
+            own = data.get("ownershipSummary") or {}
+            # Acciones en circulación (en millones) para calcular el % de cada fondo
+            shares_out_m = _nasdaq_num(
+                (own.get("ShareoutstandingTotal") or {}).get("value"))
+            inst_pct = _nasdaq_num(
+                (own.get("SharesOutstandingPCT") or {}).get("value"))
+            # SharesOutstandingPCT llega como "85.92%" (→ 85.92) pero en algunos
+            # tickers viene como fracción "0.86" → normalizar a 0-100.
+            if inst_pct is not None and inst_pct <= 1:
+                inst_pct *= 100
+            top = []
+            for row in rows[:10]:
+                name = str(row.get("ownerName", "")).strip()
+                shares = _nasdaq_num(row.get("sharesHeld"))
+                if not name or shares is None:
+                    continue
+                pct = (shares / (shares_out_m * 1e6) * 100) \
+                    if shares_out_m and shares_out_m > 0 else None
+                # "% Out" en PORCENTAJE (10.2 = 10.2%): build_holders_bars deja
+                # pasar tal cual los valores >= 1.
+                top.append({"Holder": name,
+                            "% Out": round(pct, 2) if pct is not None else 0.0})
+            if top:
+                out = {"top_institutions": top}
+                if inst_pct is not None:
+                    out["institutional_ownership_pct"] = float(inst_pct)
+                return out
+        except Exception:
+            continue
+    return {}
+
+
+def _get_insiders_from_nasdaq(ticker: str) -> dict:
+    """Fallback de transacciones de insiders via Nasdaq cuando yfinance falla
+    (rate-limit en cloud). Devuelve {insider_transactions, recent_insider_buys,
+    recent_insider_sells} en el MISMO formato que get_holders_data. NUNCA lanza."""
+    result: dict = {}
+    try:
+        data = _nasdaq_json(
+            f"/api/company/{ticker.upper()}/insider-trades"
+            "?limit=20&type=ALL&sortColumn=lastDate&sortOrder=DESC"
+        )
+        if not data:
+            return result
+        rows = (((data.get("transactionTable") or {}).get("table") or {})
+                .get("rows") or [])
+        txns, buys, sells = [], 0, 0
+        for row in rows[:20]:
+            ttype = str(row.get("transactionType", "")).lower()
+            if "buy" in ttype or "purchase" in ttype:
+                tipo, is_buy = "compra", True
+            elif "sell" in ttype or "sale" in ttype:
+                tipo, is_buy = "venta", False
+            elif "option" in ttype or "grant" in ttype or "award" in ttype:
+                tipo, is_buy = "concesión", None
+            else:
+                tipo, is_buy = "otra", None
+            if is_buy is True:
+                buys += 1
+            elif is_buy is False:
+                sells += 1
+            shares = _nasdaq_num(row.get("sharesTraded")) or 0.0
+            price = _nasdaq_num(row.get("lastPrice")) or 0.0
+            txns.append({
+                "date": str(row.get("lastDate", ""))[:10],
+                "insider": str(row.get("insider", "")).title(),
+                "position": str(row.get("relation", "")),
+                "shares": shares,
+                "value": shares * price,
+                "type": tipo,
+                "text": str(row.get("transactionType", "")),
+            })
+        if txns:
+            result["insider_transactions"] = txns
+            result["recent_insider_buys"] = buys
+            result["recent_insider_sells"] = sells
+    except Exception:
+        pass
+    return result
+
+
 def get_holders_data(ticker: str, info: dict = None) -> dict:
     """Datos de tenedores institucionales e insiders.
 
@@ -1175,20 +1276,105 @@ def get_holders_data(ticker: str, info: dict = None) -> dict:
     except Exception:
         pass
 
+    # ── Transacciones de insiders (compras/ventas de directivos) ────────────
+    # yfinance renombró columnas: la descripción vive en "Text" ("Sale at
+    # price…", "Purchase at price…", "Stock Award(Grant)…") y la fecha en
+    # "Start Date". Clasificamos el tipo desde "Text" y contamos compras/ventas.
+    # Se normaliza a claves en minúscula + `type` en español, que es el formato
+    # que consume la tabla de la pestaña Smart Money y el respaldo de Nasdaq.
     try:
         insiders = stock.insider_transactions
         if insiders is not None and not insiders.empty:
-            recent = insiders.head(20)
-            buys = recent[recent.get("Transaction", recent.get("Shares", pd.Series(dtype=str))).astype(str).str.contains("Buy|Purchase", case=False, na=False)]
-            result["recent_insider_buys"] = len(buys)
-            result["insider_transactions"] = recent[["Date", "Insider", "Position", "Shares", "Value"]].to_dict(orient="records") if all(c in recent.columns for c in ["Date", "Insider", "Position", "Shares", "Value"]) else []
+            recent = insiders.head(20).copy()
+            text_col = next((c for c in ("Text", "Transaction") if c in recent.columns), None)
+            txt = (recent[text_col].astype(str).str.lower()
+                   if text_col else pd.Series([""] * len(recent), index=recent.index))
+            is_buy = txt.str.contains("purchase|buy", na=False) & ~txt.str.contains("sale|sell", na=False)
+            is_sell = txt.str.contains("sale|sell", na=False)
+            result["recent_insider_buys"] = int(is_buy.sum())
+            result["recent_insider_sells"] = int(is_sell.sum())
+
+            date_col = next((c for c in ("Start Date", "Date") if c in recent.columns), None)
+            txns = []
+            for _, row in recent.iterrows():
+                t = str(row.get(text_col, "")) if text_col else ""
+                tl = t.lower()
+                if ("purchase" in tl or "buy" in tl) and "sale" not in tl:
+                    tipo = "compra"
+                elif "sale" in tl or "sell" in tl:
+                    tipo = "venta"
+                elif "gift" in tl:
+                    tipo = "donación"
+                elif "award" in tl or "grant" in tl:
+                    tipo = "concesión"
+                else:
+                    tipo = "otra"
+                try:
+                    shares = float(row.get("Shares", 0) or 0)
+                except Exception:
+                    shares = 0.0
+                try:
+                    value = float(row.get("Value", 0) or 0)
+                except Exception:
+                    value = 0.0
+                txns.append({
+                    "date": str(row.get(date_col, ""))[:10] if date_col else "",
+                    "insider": str(row.get("Insider", "")),
+                    "position": str(row.get("Position", "")),
+                    "shares": shares,
+                    "value": value,
+                    "type": tipo,
+                    "text": t,
+                })
+            result["insider_transactions"] = txns
     except Exception:
         pass
 
+    # ── Respaldos Nasdaq: rellenan SOLO lo que falta, nunca pisan yfinance ──
+    # api.nasdaq.com responde en IPs de datacenter (donde Yahoo bloquea), así que
+    # es lo que evita que Smart Money salga vacío en producción.
+    need_owners = not result.get("top_institutions")
+    need_pct = result.get("institutional_ownership_pct") is None
+    if need_owners or need_pct:
+        ni = _get_institutional_from_nasdaq(ticker)
+        if need_owners and ni.get("top_institutions"):
+            result["top_institutions"] = ni["top_institutions"]
+        if need_pct and ni.get("institutional_ownership_pct") is not None:
+            result["institutional_ownership_pct"] = ni["institutional_ownership_pct"]
+            result["institutional_ownership_source"] = "nasdaq"
+
+    if not result.get("insider_transactions"):
+        nd = _get_insiders_from_nasdaq(ticker)
+        if nd.get("insider_transactions"):
+            result["insider_transactions"] = nd["insider_transactions"]
+            result["recent_insider_buys"] = nd.get("recent_insider_buys", 0)
+            result["recent_insider_sells"] = nd.get("recent_insider_sells", 0)
+            result["insider_source"] = "nasdaq"
+
     try:
+        # major_holders es la fuente MÁS confiable del % total institucional
+        # (institutionsPercentHeld) e insiders (insidersPercentHeld).
         mh = stock.major_holders
         if mh is not None and not mh.empty:
             result["major_holders_raw"] = mh.to_dict()
+            try:
+                col = mh.columns[0]
+
+                def _mh(name):
+                    if name in mh.index:
+                        v = mh.loc[name, col]
+                        return float(v) if v is not None else None
+                    return None
+
+                inst_held = _mh("institutionsPercentHeld")
+                if inst_held is not None:
+                    result["institutional_ownership_pct"] = inst_held * 100
+                    result["institutional_ownership_source"] = "major_holders"
+                ins_held = _mh("insidersPercentHeld")
+                if ins_held is not None:
+                    result["insiders_percent_held"] = ins_held * 100
+            except Exception:
+                pass
     except Exception:
         pass
 
@@ -1221,7 +1407,8 @@ def get_holders_data(ticker: str, info: dict = None) -> dict:
     # TTL_HOLDERS horas. Si no hay nada, no cacheamos → el próximo intento
     # reintenta y se auto-sana.
     if (result.get("top_institutions") or result.get("institutional_ownership_pct")
-            or result.get("insider_transactions") or result.get("major_holders_raw")):
+            or result.get("insider_transactions") or result.get("major_holders_raw")
+            or result.get("insiders_percent_held")):
         _save_cache(key, result)
     return result
 
