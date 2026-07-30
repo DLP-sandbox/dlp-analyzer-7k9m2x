@@ -18,6 +18,7 @@ import anthropic
 from agents.base import BaseAgent, AgentReport
 from data.market_data import (
     get_macro_data, get_news, get_earnings_data, get_company_info,
+    get_corporate_events,
 )
 
 
@@ -32,6 +33,29 @@ MACRO: ¿El entorno de tasas, VIX, dólar y rotación sectorial es viento de col
 SENTIMIENTO: ¿La narrativa mediática mejora o se deteriora? ¿Hay divergencia sentimiento-fundamentales (oportunidad)? ¿Sentimiento extremo = señal contraria? ¿Riesgo reputacional/ESG?
 
 CATALIZADORES: ¿Earnings próximos con historial de beats? ¿Revisiones de analistas subiendo? ¿Catalizadores asimétricos (<90 días)? ¿Riesgos de evento?
+
+CATALIZADORES — CÓMO TRABAJARLOS (los earnings son SOLO UNO de ellos):
+Recibirás, además del calendario de resultados, tres bloques cuando existan:
+próximos eventos con fecha confirmada, hechos relevantes comunicados a la SEC
+(formulario 8-K, ya clasificados de forma oficial: contratos nuevos, cambios en
+la cúpula, compras de activos…) y comunicados de prensa de la empresa
+(lanzamientos, acuerdos, conferencias). También qué tipo de eventos suele mover
+al sector, para que sepas qué buscar.
+1. Un catalizador es CUALQUIER evento que pueda mover el precio: un contrato
+   grande, el lanzamiento de un producto, una conferencia de producto, una
+   aprobación regulatoria, un cambio de CEO o la fecha ex-dividendo — no solo
+   los resultados trimestrales.
+2. CITA el evento concreto con su FECHA y los días que faltan o que han pasado.
+   Nada de "hay catalizadores próximos" a secas.
+3. Explica el MECANISMO: por qué ese evento movería el precio (qué cifra o qué
+   expectativa cambia), no solo que existe.
+4. Distingue lo CONFIRMADO (tiene fecha) de lo PROBABLE (se deduce del sector o
+   de un comunicado). Si algo es una suposición tuya, dilo.
+5. Los `pros` deben ser catalizadores concretos al alza y los `cons` riesgos de
+   evento concretos. Si el dato no está en los bloques recibidos, NO lo inventes:
+   es preferible menos elementos pero reales.
+6. Si no llega ningún evento, trabaja solo con los earnings y dilo con
+   naturalidad — nunca te inventes un lanzamiento ni una conferencia.
 
 Scoring: escala continua 0-100, granular, SIN clustering (no uses 28/50/72 por defecto; calibra al detalle).
 
@@ -86,6 +110,8 @@ Retorna SIEMPRE este JSON con las TRES secciones:
       "catalyst_timeline": "<30d|90d|180d|>180d>",
       "key_upcoming_event": "<el catalizador más importante>"
     },
+    "upcoming_events": ["<hasta 3 eventos CON FECHA que podrían mover el precio, formato: 'AAAA-MM-DD — qué es y por qué importa'. Usa SOLO los que aparecen en los datos; [] si no hay>"],
+    "recent_material_events": ["<hasta 3 hechos relevantes ya ocurridos que siguen pesando, formato: 'AAAA-MM-DD — qué pasó y su lectura'. SOLO los de los datos; [] si no hay>"],
     "sub_scores": {"earnings_momentum": <0-34>, "catalyst_quality": <0-33>, "analyst_revision_trend": <0-33>},
     "top_catalyst": "<el catalizador #1 que podría mover el precio, en 1 oración corta>"
   }
@@ -106,8 +132,15 @@ class MarketContextAgent(BaseAgent):
             news = get_news(ticker, max_items=15)
             earnings = get_earnings_data(ticker)
             info = get_company_info(ticker)
+            # Eventos corporativos: hechos materiales (8-K), comunicados y tipos
+            # de evento del sector. Blindado — si todo falla devuelve las listas
+            # vacías y el mensaje simplemente no incluye ese bloque.
+            try:
+                events = get_corporate_events(ticker, info) or {}
+            except Exception:
+                events = {}
 
-            user_message = self._build_message(ticker, info, macro, news, earnings)
+            user_message = self._build_message(ticker, info, macro, news, earnings, events)
             # Más tokens que un agente normal porque genera 3 secciones en una
             # sola respuesta JSON Y con el estilo DLP (explica términos inline,
             # alarga el texto). 4500 evita que el JSON se trunque — si se trunca,
@@ -175,6 +208,17 @@ class MarketContextAgent(BaseAgent):
                     "top_catalyst": c.get("top_catalyst", ""),
                     "next_earnings": earnings.get("next_earnings"),
                     "beat_count": earnings.get("beat_count", 0),
+                    # Lo que ESCRIBIÓ el modelo sobre los eventos…
+                    "upcoming_events": list(c.get("upcoming_events", []) or [])[:3],
+                    "recent_material_events": list(c.get("recent_material_events", []) or [])[:3],
+                    # …y los datos CRUDOS de las 4 capas, para que la UI pinte
+                    # fechas reales sin depender de lo que el modelo redactó.
+                    "events_raw": {
+                        "upcoming": (events or {}).get("upcoming", [])[:6],
+                        "recent_material": (events or {}).get("recent_material", [])[:8],
+                        "press_releases": (events or {}).get("press_releases", [])[:8],
+                        "sources_ok": (events or {}).get("sources_ok", []),
+                    },
                 },
             )
 
@@ -204,7 +248,7 @@ class MarketContextAgent(BaseAgent):
             error=error,
         )
 
-    def _build_message(self, ticker, info, macro, news, earnings) -> str:
+    def _build_message(self, ticker, info, macro, news, earnings, events=None) -> str:
         sector = info.get("sector", "Unknown")
 
         def fmt_change(d, key):
@@ -262,6 +306,47 @@ class MarketContextAgent(BaseAgent):
             for e in eh[:5]:
                 sign = "+" if e["surprise_pct"] > 0 else ""
                 lines.append(f"- {e['date']}: Est ${e['estimate']:.2f} → Act ${e['actual']:.2f} ({sign}{e['surprise_pct']:.1f}%)")
+
+        # ── Eventos corporativos (más allá de los earnings) ──────────────────
+        # Cada bloque se OMITE si su capa vino vacía: el modelo nunca ve un
+        # hueco ni un "N/A" que le invite a inventarse el dato.
+        ev = events or {}
+        prox = ev.get("upcoming") or []
+        mat = ev.get("recent_material") or []
+        prs = ev.get("press_releases") or []
+        tipos_sector = ev.get("sector_event_types") or []
+
+        if prox:
+            lines.append("")
+            lines.append("### Próximos eventos con FECHA CONFIRMADA:")
+            for e in prox[:6]:
+                d = e.get("days_from_today")
+                cuando = f"en {d} días" if isinstance(d, int) and d >= 0 else "fecha por confirmar"
+                lines.append(f"- **{e.get('date','')}** ({cuando}): {e.get('title','')}")
+
+        if mat:
+            lines.append("")
+            lines.append("### Hechos relevantes comunicados a la SEC (formulario 8-K, clasificación oficial):")
+            for e in mat[:8]:
+                lines.append(f"- {e.get('date','')} (hace {e.get('days_ago','?')} días): {e.get('title','')}")
+
+        if prs:
+            lines.append("")
+            lines.append("### Comunicados de prensa de la empresa (los más recientes):")
+            for e in prs[:8]:
+                fecha = e.get("date") or "s/f"
+                lines.append(f"- {fecha}: {e.get('title','')}")
+
+        if tipos_sector:
+            lines.append("")
+            lines.append("### Qué suele mover a las empresas de este sector:")
+            for t in tipos_sector:
+                lines.append(f"- {t}")
+
+        if not (prox or mat or prs):
+            lines.append("")
+            lines.append("### Sin eventos corporativos disponibles ahora mismo "
+                         "(no inventes ninguno: básate solo en los earnings).")
 
         # ── Noticias (compartidas por sentimiento y catalizadores) ──
         if news:

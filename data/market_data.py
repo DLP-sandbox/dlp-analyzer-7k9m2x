@@ -57,6 +57,8 @@ TTL_MACRO        = 1.0      # 1 hora — indicadores macro
 TTL_RS           = 1.0      # 1 hora — relative strength
 TTL_SNAPSHOT     = 0.05     # 3 minutos — precios en vivo
 TTL_LIVE_PRICE   = 0.0167   # 60 segundos — precio actual en vivo de un solo ticker
+TTL_EVENTS       = 6.0      # 6 horas — eventos corporativos (8-K, comunicados)
+TTL_SEC_TICKERS  = 168.0    # 7 días — mapa ticker→CIK de la SEC (cambia muy poco)
 
 
 def _save_cache(key: str, data: dict) -> None:
@@ -1413,6 +1415,293 @@ def get_holders_data(ticker: str, info: dict = None) -> dict:
     return result
 
 
+# ── Eventos corporativos (catalizadores más allá de los earnings) ──────────
+# Cuatro capas INDEPENDIENTES. Ninguna lanza nunca y cada una se salta sola si
+# su fuente cae, así que la sección siempre tiene algo que enseñar:
+#   1) Calendario duro  — earnings, ex-dividendo y pago (yfinance + Nasdaq)
+#   2) Hechos materiales — 8-K de la SEC (oficial, gratis, cubre TODOS los
+#      tickers de EE. UU., incluidos los de clase tipo BRK-B)
+#   3) Comunicados       — press releases de Nasdaq (texto en lenguaje natural)
+#   4) Tipos por sector  — data/sector_events.py (estático, sin red)
+
+_SEC_UA = {"User-Agent": "DLP Market Analyzer contacto@dlp-analyzer.app"}
+
+# Código de ítem de un 8-K → qué significa, en español llano. Es la CLASIFICACIÓN
+# OFICIAL del hecho relevante: no hay que adivinar de qué va el evento.
+_SEC_8K_ITEMS = {
+    "1.01": "contrato o acuerdo relevante",
+    "1.02": "fin de un contrato relevante",
+    "1.03": "quiebra o suspensión de pagos",
+    "2.01": "compra o venta de activos",
+    "2.02": "resultados trimestrales",
+    "2.03": "nueva deuda u obligación financiera",
+    "2.05": "plan de reestructuración con costes",
+    "2.06": "deterioro contable de activos",
+    "3.01": "aviso sobre las normas de cotización",
+    "3.02": "emisión de acciones no registrada",
+    "4.01": "cambio de auditor",
+    "4.02": "estados financieros previos dejan de ser fiables",
+    "5.01": "cambio de control de la empresa",
+    "5.02": "cambios en la cúpula directiva o el consejo",
+    "5.03": "cambio de estatutos o de ejercicio fiscal",
+    "5.07": "resultados de la junta de accionistas",
+    "7.01": "comunicación relevante al mercado",
+    "8.01": "otro hecho relevante",
+}
+# Ítems que por sí solos no son un catalizador (papeleo adjunto).
+_SEC_ITEMS_RUIDO = {"9.01"}
+
+
+def _sec_cik_for(ticker: str):
+    """CIK (identificador SEC) de un ticker, o None. El mapa completo se cachea
+    7 días: son ~10.400 empresas y cambia muy poco. NUNCA lanza."""
+    mapa = _load_cache("sec_cik_map", ttl_hours=TTL_SEC_TICKERS)
+    if not mapa:
+        try:
+            r = requests.get("https://www.sec.gov/files/company_tickers.json",
+                             headers=_SEC_UA, timeout=15)
+            if r.status_code != 200:
+                return None
+            data = r.json()
+            mapa = {str(v.get("ticker", "")).upper(): v.get("cik_str")
+                    for v in data.values() if v.get("ticker")}
+            if mapa:
+                _save_cache("sec_cik_map", mapa)
+        except Exception:
+            return None
+    if not mapa:
+        return None
+    # La SEC usa el ticker sin separador para las clases (BRK-B → BRKB), pero
+    # se prueban las tres formas por si acaso.
+    tk = ticker.upper()
+    for cand in (tk, tk.replace("-", ""), tk.replace("-", ".")):
+        cik = mapa.get(cand)
+        if cik:
+            try:
+                return int(cik)
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _get_8k_events_from_sec(ticker: str, max_items: int = 12) -> list:
+    """Hechos relevantes recientes desde los formularios 8-K de la SEC.
+
+    Es la fuente MÁS fiable: es obligatoria por ley, gratuita, sin API key y
+    responde en IPs de datacenter. Cada 8-K trae códigos de ítem que dicen de
+    qué va el hecho (contrato nuevo, cambio de CEO, resultados…), así que el
+    tipo de evento NO se adivina. Devuelve [] si algo falla. NUNCA lanza."""
+    cik = _sec_cik_for(ticker)
+    if not cik:
+        return []
+    try:
+        r = requests.get(f"https://data.sec.gov/submissions/CIK{cik:010d}.json",
+                         headers=_SEC_UA, timeout=15)
+        if r.status_code != 200:
+            return []
+        rec = ((r.json() or {}).get("filings") or {}).get("recent") or {}
+        forms = rec.get("form") or []
+        dates = rec.get("filingDate") or []
+        items = rec.get("items") or [""] * len(forms)
+        hoy = datetime.now().date()
+        out = []
+        for i, form in enumerate(forms):
+            if form != "8-K" or i >= len(dates):
+                continue
+            codigos = [c.strip() for c in str(items[i] if i < len(items) else "").split(",") if c.strip()]
+            utiles = [c for c in codigos if c not in _SEC_ITEMS_RUIDO]
+            if not utiles:
+                continue
+            tipos = [_SEC_8K_ITEMS.get(c) for c in utiles]
+            tipos = [t for t in tipos if t]
+            if not tipos:
+                continue
+            try:
+                d = datetime.strptime(dates[i], "%Y-%m-%d").date()
+                dias = (hoy - d).days
+            except Exception:
+                continue
+            if dias < 0 or dias > 400:      # solo el último año
+                continue
+            out.append({
+                "date": dates[i],
+                "days_ago": dias,
+                "items": utiles,
+                "types": tipos,
+                "title": " · ".join(tipos).capitalize(),
+                "source": "SEC 8-K",
+            })
+            if len(out) >= max_items:
+                break
+        return out
+    except Exception:
+        return []
+
+
+def _pr_es_de_la_empresa(titulo: str, ticker: str, nombre: str) -> bool:
+    """True si el titular habla DE VERDAD de esta empresa.
+
+    Los feeds devuelven mucho ruido (pidiendo AAPL llegan titulares de Ford o
+    Qualcomm). Se exige que aparezca el ticker o una palabra distintiva del
+    nombre de la empresa."""
+    t = (titulo or "").lower()
+    if not t:
+        return False
+    if ticker and ticker.lower() in t:
+        return True
+    # Palabras del nombre, quitando sufijos societarios y genéricos
+    basura = {"inc", "inc.", "corp", "corp.", "corporation", "company", "co",
+              "co.", "ltd", "ltd.", "plc", "holdings", "group", "the", "&",
+              "sa", "nv", "ag", "class", "common", "stock", "platforms"}
+    for w in re.split(r"[^A-Za-z0-9]+", (nombre or "")):
+        w = w.strip().lower()
+        if len(w) >= 4 and w not in basura and w in t:
+            return True
+    return False
+
+
+def _get_press_releases_from_nasdaq(ticker: str, nombre: str = "", max_items: int = 10) -> list:
+    """Comunicados de prensa de la empresa vía Nasdaq. Aportan el lenguaje
+    natural que el 8-K no da ("X firma acuerdo con Y", "lanza el producto Z").
+
+    Tickers de CLASE: Nasdaq usa el punto (BRK.B), no el guion de yfinance — sin
+    esto BRK-B devolvía 0 comunicados. Devuelve [] si falla. NUNCA lanza."""
+    variantes = [ticker.upper()]
+    if "-" in ticker:
+        variantes.append(ticker.upper().replace("-", "."))
+    hoy = datetime.now().date()
+    for tk in variantes:
+        try:
+            data = _nasdaq_json(
+                f"/api/news/topic/press_release?q=symbol:{tk}|assetclass:stocks"
+                f"&offset=0&limit={max_items * 2}"
+            )
+            rows = ((data or {}).get("rows") or []) if data else []
+            out = []
+            for row in rows:
+                titulo = str(row.get("title", "")).strip()
+                if not titulo:
+                    continue
+                # Filtro de ruido: el titular debe hablar de ESTA empresa.
+                if not _pr_es_de_la_empresa(titulo, ticker, nombre):
+                    continue
+                fecha, dias = "", None
+                for fmt in ("%b %d, %Y", "%Y-%m-%d"):
+                    try:
+                        d = datetime.strptime(str(row.get("created", "")).strip(), fmt).date()
+                        fecha, dias = d.isoformat(), (hoy - d).days
+                        break
+                    except Exception:
+                        continue
+                if dias is not None and (dias < 0 or dias > 180):
+                    continue
+                out.append({"date": fecha, "days_ago": dias,
+                            "title": titulo, "source": "Comunicado"})
+                if len(out) >= max_items:
+                    break
+            if out:
+                return out
+        except Exception:
+            continue
+    return []
+
+
+def get_corporate_events(ticker: str, info: dict = None) -> dict:
+    """Catalizadores del ticker, combinando las cuatro capas.
+
+    Contrato de blindaje: NUNCA lanza y SIEMPRE devuelve el dict con todas sus
+    claves (aunque sea con listas vacías). Quien lo pinta omite cada bloque que
+    venga vacío, así que si las fuentes caen la sección no muestra huecos ni
+    errores — simplemente enseña menos. `sources_ok` permite ver qué capas
+    respondieron."""
+    key = f"events_{ticker}"
+    cached = _load_cache(key, ttl_hours=TTL_EVENTS)
+    if cached:
+        return cached
+
+    out = {"upcoming": [], "recent_material": [], "press_releases": [],
+           "sector_event_types": [], "sources_ok": []}
+    try:
+        info = info if isinstance(info, dict) else (get_company_info(ticker) or {})
+    except Exception:
+        info = {}
+    nombre = str(info.get("name") or "")
+    hoy = datetime.now().date()
+
+    # ── Capa 1: calendario duro (earnings + dividendos) ────────────────────
+    try:
+        earn = get_earnings_data(ticker) or {}
+        nxt, dias = earn.get("next_earnings"), earn.get("days_to_next_earnings")
+        if nxt:
+            out["upcoming"].append({
+                "date": str(nxt)[:10], "days_from_today": dias,
+                "type": "resultados trimestrales",
+                "title": "Publicación de resultados trimestrales",
+                "source": "Calendario", "confirmed": True,
+            })
+            out["sources_ok"].append("earnings")
+    except Exception:
+        pass
+    try:
+        cal = yf.Ticker(ticker).calendar or {}
+        for campo, etiqueta in (("Ex-Dividend Date", "fecha ex-dividendo"),
+                                ("Dividend Date", "pago de dividendo")):
+            v = cal.get(campo)
+            if not v:
+                continue
+            try:
+                d = v if hasattr(v, "year") else datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
+                dd = (d - hoy).days
+                if dd >= 0:
+                    out["upcoming"].append({
+                        "date": d.isoformat(), "days_from_today": dd,
+                        "type": etiqueta, "title": etiqueta.capitalize(),
+                        "source": "Calendario", "confirmed": True,
+                    })
+            except Exception:
+                continue
+        if any(e["type"] != "resultados trimestrales" for e in out["upcoming"]):
+            out["sources_ok"].append("dividendos")
+    except Exception:
+        pass
+
+    # ── Capa 2: hechos materiales (8-K de la SEC) ──────────────────────────
+    try:
+        sec = _get_8k_events_from_sec(ticker)
+        if sec:
+            out["recent_material"] = sec
+            out["sources_ok"].append("sec_8k")
+    except Exception:
+        pass
+
+    # ── Capa 3: comunicados de prensa (Nasdaq) ─────────────────────────────
+    try:
+        pr = _get_press_releases_from_nasdaq(ticker, nombre)
+        if pr:
+            out["press_releases"] = pr
+            out["sources_ok"].append("comunicados")
+    except Exception:
+        pass
+
+    # ── Capa 4: tipos de evento típicos del sector (sin red) ───────────────
+    try:
+        from data.sector_events import sector_event_types
+        tipos = sector_event_types(info.get("sector"))
+        if tipos:
+            out["sector_event_types"] = tipos
+            out["sources_ok"].append("sector")
+    except Exception:
+        pass
+
+    out["upcoming"].sort(key=lambda e: e.get("days_from_today") if e.get("days_from_today") is not None else 9999)
+
+    # Anti-envenenamiento: solo se cachea si alguna capa trajo algo real, para
+    # que un corte de red no congele una sección vacía durante todo el TTL.
+    if out["upcoming"] or out["recent_material"] or out["press_releases"]:
+        _save_cache(key, out)
+    return out
+
+
 # ── Noticias ───────────────────────────────────────────────────────────────
 
 def get_news(ticker: str, max_items: int = 15) -> list[dict]:
@@ -1470,6 +1759,29 @@ def get_news(ticker: str, max_items: int = 15) -> list[dict]:
                     })
             except Exception:
                 continue
+
+        # ── Filtro de RUIDO ────────────────────────────────────────────────
+        # El feed de Yahoo mezcla noticias de OTRAS empresas: pidiendo AAPL
+        # llegaban titulares de Caterpillar, Ford o Qualcomm. Eso ensuciaba el
+        # análisis de Sentimiento y de Catalizadores, que las leían como si
+        # fueran de la empresa. Se exige que el titular mencione el ticker o una
+        # palabra distintiva del nombre.
+        # Red de seguridad: si el filtro dejara la lista VACÍA (nombre raro,
+        # titulares que no citan a la empresa), se devuelve la lista sin filtrar
+        # — mejor algo de ruido que quedarse sin noticias.
+        try:
+            _nombre = ""
+            try:
+                _cached_info = _load_cache(f"info_{ticker}", ttl_hours=TTL_COMPANY_INFO) or {}
+                _nombre = str(_cached_info.get("name") or "")
+            except Exception:
+                _nombre = ""
+            propias = [n for n in result
+                       if _pr_es_de_la_empresa(n.get("title", ""), ticker, _nombre)]
+            if propias:
+                result = propias
+        except Exception:
+            pass
 
         # Ordenar por fecha desc (más recientes primero)
         result.sort(key=lambda x: x.get("age_hours", 9999))

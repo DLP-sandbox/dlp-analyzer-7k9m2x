@@ -175,6 +175,17 @@ def _cached_rr_fig(current_price: float, stop: float, target: float, ticker: str
     return build_rr_chart(current_price, stop, target, ticker)
 
 
+@st.cache_data(ttl=1800, show_spinner=False, max_entries=48)
+def _cached_corporate_events(ticker: str) -> dict:
+    """Eventos corporativos (calendario + 8-K + comunicados + sector).
+    Respaldo para análisis guardados que no los traen. Nunca lanza."""
+    try:
+        from data.market_data import get_corporate_events
+        return get_corporate_events(ticker) or {}
+    except Exception:
+        return {}
+
+
 @st.cache_data(ttl=900, show_spinner=False, max_entries=48)
 def _cached_risk_levels(ticker: str) -> dict:
     """Niveles de riesgo calculados en vivo (OHLCV → TradingView). Respaldo para
@@ -1680,20 +1691,51 @@ def render_overview(analysis: StockAnalysis):
 
     with col_info:
         st.markdown("#### Información")
-        info_data = {
-            "Empresa":   analysis.company_name,
-            "Ticker":    analysis.ticker,
-            "Sector":    analysis.sector,
-            "Horizonte": analysis.time_horizon,
-        }
+        # Info en vivo (cacheada): de aquí salen sector e industria, que tienen
+        # respaldo TradingView y por tanto llegan también en cloud.
+        _live_info = _cached_company_info(analysis.ticker) or {}
+
+        # Descripción del negocio SIN IA: se traduce la industria con un mapa
+        # estático (data/industry_labels.py). La descripción larga de yfinance
+        # no sirve aquí — viene en inglés y en cloud llega vacía.
+        #
+        # BLINDAJE: si no se consigue el dato (acción poco conocida, fuentes
+        # caídas, o incluso si el módulo fallara al importar), la fila
+        # simplemente NO SE PINTA. Nunca se muestra "—", "Unknown" ni un error:
+        # se construye el diccionario solo con lo que tiene valor real.
+        try:
+            from data.industry_labels import sector_es, describe_business
+            _sector_txt = sector_es(_live_info.get("sector") or analysis.sector)
+            _desc_txt = describe_business(_live_info.get("industry"),
+                                          _live_info.get("sector") or analysis.sector)
+        except Exception:
+            _sector_txt = _desc_txt = ""
+
+        def _hay(v):
+            """Solo se pinta una fila si su valor es texto útil de verdad."""
+            return bool(v) and str(v).strip().lower() not in (
+                "", "—", "-", "n/a", "n/d", "none", "unknown", "nan")
+
+        info_data = {}
+        if _hay(analysis.company_name):
+            info_data["Empresa"] = analysis.company_name
+        if _hay(_sector_txt):
+            info_data["Sector"] = _sector_txt
+        if _hay(_desc_txt):
+            info_data["Descripción"] = _desc_txt
+
         for k, v in info_data.items():
-            # Layout grid (NO flex) — evita que key y value se solapen
-            # cuando el value es largo (típicamente el Horizonte). El value
-            # se limita a 2 líneas con line-clamp; resto se trunca con "...".
+            # Layout grid (NO flex) — evita que key y value se solapen cuando el
+            # value es largo. La Descripción lleva un modificador que le quita el
+            # recorte de 2 líneas: se expande hacia abajo en vez de cortarse
+            # con "…" (hay espacio de sobra en esta columna).
+            cls = "overview-info-value"
+            if k == "Descripción":
+                cls += " overview-info-value--desc"
             st.markdown(
                 f'<div class="overview-info-row">'
                 f'<span class="overview-info-key">{k}</span>'
-                f'<span class="overview-info-value">{_md_safe(v)}</span>'
+                f'<span class="{cls}">{_md_safe(v)}</span>'
                 f'</div>',
                 unsafe_allow_html=True,
             )
@@ -2616,6 +2658,50 @@ def render_catalysts(analysis: StockAnalysis):
     if key_event and key_event not in ("—", ""):
         _render_insight_card("Próximo Evento Crítico", str(key_event),
                              color="#6FA3E0", icon="🔔")
+
+    # ── Agenda de eventos corporativos ───────────────────────────────────────
+    # Datos CRUDOS de las 4 capas (calendario, 8-K de la SEC, comunicados). Si el
+    # análisis es antiguo y no los trae guardados, se piden frescos — están
+    # cacheados 6h y blindados, así que esto nunca cuelga ni rompe el render.
+    _ev = (rd.get("events_raw") or {})
+    if not (_ev.get("upcoming") or _ev.get("recent_material") or _ev.get("press_releases")):
+        try:
+            _ev = _cached_corporate_events(analysis.ticker) or {}
+        except Exception:
+            _ev = {}
+
+    _prox = _ev.get("upcoming") or []
+
+    # Solo se pinta la AGENDA: fechas confirmadas que están por delante.
+    # Los hechos ya comunicados a la SEC y los comunicados de prensa NO se
+    # muestran a propósito — miran al pasado y no aportan al leerlos. Se siguen
+    # recogiendo y pasando al modelo, que es donde sí suman: de ahí saca el
+    # contexto de contratos, lanzamientos y cambios directivos para el análisis.
+    #
+    # BLINDAJE: si no hay ninguna fecha por delante, la sección entera no
+    # aparece — nunca un hueco, un "N/A" ni un error.
+    if _prox:
+        st.markdown('<div class="section-title-bar">Agenda de Eventos de la Empresa</div>',
+                    unsafe_allow_html=True)
+
+    if _prox:
+        chips = ""
+        for e in _prox[:4]:
+            d = e.get("days_from_today")
+            cuando = f"en {d} d" if isinstance(d, int) and d >= 0 else "por confirmar"
+            col = "#F1495F" if isinstance(d, int) and d <= 7 else "#E2B25C" if isinstance(d, int) and d <= 30 else "#6FA3E0"
+            chips += (f"<div style='display:flex;align-items:center;gap:10px;padding:9px 12px;"
+                      f"border-left:2px solid {col};background:rgba(255,255,255,0.02);"
+                      f"border-radius:0 8px 8px 0;margin-bottom:6px;'>"
+                      f"<span style='color:{col};font-family:JetBrains Mono,monospace;font-size:0.74rem;"
+                      f"font-weight:700;min-width:96px;'>{e.get('date','')}</span>"
+                      f"<span style='color:#C9CDD3;font-size:0.84rem;flex:1;'>{_md_safe(e.get('title',''))}</span>"
+                      f"<span style='color:{col};font-size:0.72rem;font-family:JetBrains Mono,monospace;'>{cuando}</span>"
+                      f"</div>")
+        st.markdown(f"<div style='margin:-2px 0 12px;'>"
+                    f"<div style='color:#8D949E;font-size:0.78rem;margin-bottom:7px;'>"
+                    f"Fechas confirmadas por delante:</div>{chips}</div>",
+                    unsafe_allow_html=True)
 
     # ── Pros / Cons ──
     _render_pros_cons(report,
