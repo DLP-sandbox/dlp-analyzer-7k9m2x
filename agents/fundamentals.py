@@ -208,7 +208,7 @@ class FundamentalsAgent(BaseAgent):
         if eh:
             lines.append("")
             lines.append(f"## Historial Earnings (últimos {len(eh)} quarters)")
-            lines.append(f"- Promedio surprise: {earnings.get('avg_surprise', 0):.1f}%")
+            lines.append(f"- Promedio surprise: {(earnings.get('avg_surprise') or 0):.1f}%")
             lines.append(f"- Beats consecutivos: {earnings.get('beat_count', 0)}/{len(eh)}")
             lines.append(f"- Próximos earnings: {earnings.get('next_earnings', 'N/A')}")
             for e in eh[:4]:

@@ -6,7 +6,8 @@ import anthropic
 import numpy as np
 
 from agents.base import BaseAgent, AgentReport
-from data.market_data import get_price_history, compute_technical_indicators, get_company_info
+from data.market_data import (get_price_history, compute_technical_indicators,
+                              get_technical_indicators, get_company_info)
 
 
 SYSTEM_PROMPT = """Eres el Risk Manager de un hedge fund de élite especializado en HOLD DE CALIDAD A LARGO PLAZO.
@@ -89,7 +90,10 @@ class RiskAgent(BaseAgent):
         try:
             df = get_price_history(ticker, period="1y")
             info = get_company_info(ticker)
-            ind = compute_technical_indicators(df) if not df.empty else {}
+            # Envoltorio resiliente: si el histórico es corto (salida a bolsa
+            # reciente) o yfinance está bloqueado, cae a TradingView en vez de
+            # devolver un dict vacío que hacía petar el formateo de este agente.
+            ind = get_technical_indicators(ticker, df)
 
             # Calcular métricas cuantitativas de riesgo pre-análisis
             risk_metrics = self._compute_risk_metrics(df, ind, info)
@@ -142,10 +146,20 @@ class RiskAgent(BaseAgent):
         metrics["atr"] = atr
         metrics["atr_pct"] = atr / price * 100
 
-        # Stop técnico: mínimo de las últimas 10 semanas
+        # ── Stop técnico: deliberadamente PESIMISTA ───────────────────────────
+        # Misma metodología que get_risk_levels, para que el agente y el
+        # dashboard no se contradigan: se toma la MÁS CONSERVADORA (la más baja)
+        # entre el mínimo reciente un 3% por debajo y 2.4×ATR bajo el precio.
+        # Antes solo se usaba el swing low ×0.98, que en acciones volátiles daba
+        # un riesgo irrealmente bajo. Suelo de cordura en −30%.
         low_10w = float(df["Low"].tail(50).min())
         metrics["swing_low_10w"] = low_10w
-        metrics["stop_suggested"] = round(low_10w * 0.98, 2)  # 2% bajo el swing low
+        _stop_swing = low_10w * 0.97
+        _stop_atr = price - 2.4 * atr
+        _stop = min(_stop_swing, _stop_atr)
+        _stop = max(_stop, price * 0.70)
+        _stop = min(_stop, price * 0.99)
+        metrics["stop_suggested"] = round(_stop, 2)
         metrics["risk_pct"] = (price - metrics["stop_suggested"]) / price * 100
 
         # Resistencia: 52W high o 25% arriba del precio
@@ -179,24 +193,30 @@ class RiskAgent(BaseAgent):
         lines = [
             f"# Análisis de Riesgo & Sizing: {ticker} — {info.get('name', ticker)}",
             f"**Precio actual:** ${price}",
-            f"**Beta:** {info.get('beta', 1.0):.2f}",
+            f"**Beta:** {(info.get('beta') or 1.0):.2f}",
             "",
             "## Métricas de Riesgo Pre-Calculadas",
-            f"- ATR 14 días: ${risk.get('atr', 'N/A'):.2f} ({risk.get('atr_pct', 0):.1f}% del precio)" if risk.get('atr') else "- ATR: N/A",
-            f"- Swing Low 10W: ${risk.get('swing_low_10w', 'N/A'):.2f}",
-            f"- Nivel de Protección Sugerido (cuantitativo): ${risk.get('stop_suggested', 'N/A'):.2f}",
-            f"- Riesgo al nivel de protección: -{risk.get('risk_pct', 0):.1f}%",
-            f"- Target Sugerido (cuantitativo): ${risk.get('target_suggested', 'N/A'):.2f}",
-            f"- Upside potencial: +{risk.get('reward_pct', 0):.1f}%",
-            f"- R/R Ratio (cuantitativo): {risk.get('rr_ratio', 0):.2f}:1",
-            f"- Portfolio % sugerido (cuantitativo): {risk.get('implied_portfolio_pct', 0):.1f}%",
+            f"- ATR 14 días: ${risk.get('atr', 'N/A'):.2f} ({(risk.get('atr_pct') or 0):.1f}% del precio)" if risk.get('atr') else "- ATR: N/A",
+            # Guardas: sin el `if`, un dato ausente devolvía el string 'N/A' y el
+            # formato :.2f lanzaba "Unknown format code 'f' for object of type
+            # 'str'", tumbando el agente completo (sin stop, target ni R/R).
+            (f"- Swing Low 10W: ${risk.get('swing_low_10w'):.2f}"
+             if isinstance(risk.get('swing_low_10w'), (int, float)) else "- Swing Low 10W: N/A"),
+            (f"- Nivel de Protección Sugerido (cuantitativo): ${risk.get('stop_suggested'):.2f}"
+             if isinstance(risk.get('stop_suggested'), (int, float)) else "- Nivel de Protección Sugerido: N/A"),
+            f"- Riesgo al nivel de protección: -{risk.get('risk_pct') or 0:.1f}%",
+            (f"- Target Sugerido (cuantitativo): ${risk.get('target_suggested'):.2f}"
+             if isinstance(risk.get('target_suggested'), (int, float)) else "- Target Sugerido: N/A"),
+            f"- Upside potencial: +{(risk.get('reward_pct') or 0):.1f}%",
+            f"- R/R Ratio (cuantitativo): {(risk.get('rr_ratio') or 0):.2f}:1",
+            f"- Portfolio % sugerido (cuantitativo): {(risk.get('implied_portfolio_pct') or 0):.1f}%",
             "",
             "## Indicadores Técnicos Relevantes",
             f"- RSI 14: {ind.get('rsi_14', 'N/A'):.1f}" if ind.get('rsi_14') else "- RSI 14: N/A",
             f"- SMA 50: ${ind.get('sma_50', 'N/A'):.2f}" if ind.get('sma_50') else "- SMA 50: N/A",
             f"- SMA 200: ${ind.get('sma_200', 'N/A'):.2f}" if ind.get('sma_200') else "- SMA 200: N/A",
             f"- Stage: {ind.get('stage', 'N/A')}",
-            f"- Distancia 52W High: {ind.get('pct_from_52w_high', 0):.1f}%",
+            f"- Distancia 52W High: {(ind.get('pct_from_52w_high') or 0):.1f}%",
             f"- 52W High: ${ind.get('52w_high', 'N/A'):.2f}" if ind.get('52w_high') else "- 52W High: N/A",
             f"- 52W Low: ${ind.get('52w_low', 'N/A'):.2f}" if ind.get('52w_low') else "- 52W Low: N/A",
             "",

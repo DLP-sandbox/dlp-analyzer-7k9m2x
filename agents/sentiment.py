@@ -107,7 +107,7 @@ class SentimentAgent(BaseAgent):
         lines += [
             "",
             "## Contexto de la Empresa",
-            f"- Beta: {info.get('beta', 1.0):.2f}",
+            f"- Beta: {(info.get('beta') or 1.0):.2f}",
             f"- 52W High: ${info.get('52w_high', 'N/A')}",
             f"- 52W Low: ${info.get('52w_low', 'N/A')}",
             "",

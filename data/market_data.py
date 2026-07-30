@@ -408,11 +408,23 @@ def get_risk_levels(ticker: str, indicators: dict = None) -> dict:
             return {}
         atr = ind.get("atr_14") or (price * 0.03)
         hi52 = ind.get("52w_high") or (price * 1.25)
-        # Stop: mínimo reciente (Low.3M) 2% abajo, o 2×ATR bajo el precio.
+        # ── Nivel de protección: deliberadamente PESIMISTA ────────────────────
+        # Se calculan dos referencias técnicas y se toma la MÁS CONSERVADORA (la
+        # más baja), no la más cercana al precio. Antes se usaba max(), que
+        # elegía el stop más pegado y daba una falsa sensación de riesgo bajo:
+        # en SPCX salía −6.8% cuando la acción, con un ATR del 9.8% diario,
+        # puede perfectamente irse a los 90-80. Ahora sale ~−23%, que es realista.
+        #   · mínimo reciente (Low.3M) un 3% por debajo
+        #   · 2.4×ATR bajo el precio (antes 2.0)
+        # Efecto medido: en acciones tranquilas apenas cambia (AAPL −4.7%→−5.7%,
+        # PEP −4.8%→−5.7%); donde de verdad importa es en las volátiles.
         low_ref = ind.get("low_3m")
-        stop_swing = (low_ref * 0.98) if low_ref else None
-        stop_atr = price - 2.0 * atr
-        stop = max([s for s in (stop_swing, stop_atr) if s is not None] or [stop_atr])
+        stop_swing = (low_ref * 0.97) if low_ref else None
+        stop_atr = price - 2.4 * atr
+        stop = min([s for s in (stop_swing, stop_atr) if s is not None] or [stop_atr])
+        # Suelo de cordura: en una acción hipervolátil, 2.4×ATR podía dar un stop
+        # a −45%, que no sirve para decidir nada. Se limita a −30%.
+        stop = max(stop, price * 0.70)
         stop = min(stop, price * 0.99)   # nunca por encima del precio
         # Target: 1º el target REAL de analistas (TradingView, funciona en cloud)
         # si implica subida; si no, el máximo de 52 semanas / +25%.

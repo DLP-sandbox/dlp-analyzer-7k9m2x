@@ -97,7 +97,7 @@ class MacroAgent(BaseAgent):
 
         lines = [
             f"# Análisis Macro & Sector: {ticker} — {info.get('name', ticker)}",
-            f"**Sector:** {sector} | **Beta:** {info.get('beta', 1.0):.2f}",
+            f"**Sector:** {sector} | **Beta:** {(info.get('beta') or 1.0):.2f}",
             "",
             "## Indicadores de Mercado Actuales (índices reales, no ETFs)",
             f"- S&P 500 Index (^GSPC): {fmt_change(macro, 'sp500')}",
@@ -123,7 +123,7 @@ class MacroAgent(BaseAgent):
 
         lines += [
             "",
-            f"**Beta de la acción:** {info.get('beta', 1.0):.2f} (sensibilidad al mercado)",
+            f"**Beta de la acción:** {(info.get('beta') or 1.0):.2f} (sensibilidad al mercado)",
             "",
             "Evalúa si el entorno macro es favorable para esta acción específica y retorna el JSON.",
         ]

@@ -265,7 +265,7 @@ class MarketContextAgent(BaseAgent):
         lines = [
             f"# Contexto de Mercado: {ticker} — {info.get('name', ticker)}",
             f"**Sector:** {sector} | **Industria:** {info.get('industry')} | "
-            f"**Beta:** {info.get('beta', 1.0):.2f} | "
+            f"**Beta:** {(info.get('beta') or 1.0):.2f} | "
             f"**Market Cap:** ${info.get('market_cap', 0) / 1e9:.1f}B",
             f"**Analyst Rating:** {info.get('analyst_rating', 'N/A')} | "
             f"**Target:** ${info.get('target_price', 'N/A')} vs Actual ${info.get('current_price', 'N/A')}",
@@ -296,7 +296,7 @@ class MarketContextAgent(BaseAgent):
             f"({earnings.get('days_to_next_earnings', 'N/A')} días) "
             f"{earnings.get('next_earnings_proximity', '')}",
             f"- Beats recientes: {earnings.get('beat_count', 'N/A')} | "
-            f"Surprise promedio: {earnings.get('avg_surprise', 0):.1f}%"
+            f"Surprise promedio: {(earnings.get('avg_surprise') or 0):.1f}%"
             if earnings.get('avg_surprise') is not None else
             f"- Beats recientes: {earnings.get('beat_count', 'N/A')} | Surprise promedio: N/A",
         ]

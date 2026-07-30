@@ -103,7 +103,7 @@ class CatalystsAgent(BaseAgent):
             f"({earnings.get('days_to_next_earnings', 'N/A')} días desde hoy) "
             f"{earnings.get('next_earnings_proximity', '')}",
             f"- Beats en últimos quarters: {earnings.get('beat_count', 'N/A')}",
-            f"- Surprise promedio: {earnings.get('avg_surprise', 0):.1f}%" if earnings.get('avg_surprise') is not None else "- Surprise promedio: N/A",
+            f"- Surprise promedio: {(earnings.get('avg_surprise') or 0):.1f}%" if earnings.get('avg_surprise') is not None else "- Surprise promedio: N/A",
             "",
         ]
 

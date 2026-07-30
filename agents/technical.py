@@ -9,7 +9,7 @@ import pandas as pd
 from agents.base import BaseAgent, AgentReport
 from data.market_data import (
     get_price_history, get_weekly_history,
-    compute_technical_indicators, get_relative_strength
+    compute_technical_indicators, get_technical_indicators, get_relative_strength
 )
 
 
@@ -84,7 +84,12 @@ class TechnicalAgent(BaseAgent):
                 return self._safe_report(ticker, "Sin datos de precio disponibles")
 
             # Indicadores diarios
-            ind_daily = compute_technical_indicators(df_daily)
+            # get_technical_indicators (no compute_… directo): añade la cadena de
+            # respaldo a TradingView. Sin esto, una acción con POCO HISTÓRICO
+            # (salida a bolsa reciente: compute exige ≥50 sesiones) o un yfinance
+            # bloqueado en cloud dejaban `ind_daily` VACÍO, y las líneas que
+            # formatean con :.2f un `.get(clave,'N/A')` petaban el agente entero.
+            ind_daily = get_technical_indicators(ticker, df_daily)
             # Indicadores semanales
             ind_weekly = compute_technical_indicators(df_weekly) if not df_weekly.empty else {}
 
@@ -128,24 +133,29 @@ class TechnicalAgent(BaseAgent):
             f"**Precio actual:** ${price} | **Stage:** {ind_d.get('stage', 'N/A')}",
             "",
             "## Indicadores Diarios",
-            f"- SMA 20: ${ind_d.get('sma_20', 'N/A'):.2f} | vs precio: {ind_d.get('price_vs_sma20_pct', 0):.1f}%" if ind_d.get('sma_20') else "- SMA 20: N/A",
-            f"- SMA 50: ${ind_d.get('sma_50', 'N/A'):.2f} | vs precio: {ind_d.get('price_vs_sma50_pct', 0):.1f}%" if ind_d.get('sma_50') else "- SMA 50: N/A",
-            f"- SMA 150: ${ind_d.get('sma_150', 'N/A'):.2f} | vs precio: {ind_d.get('price_vs_sma150_pct', 0):.1f}%" if ind_d.get('sma_150') else "- SMA 150: N/A",
-            f"- SMA 200: ${ind_d.get('sma_200', 'N/A'):.2f} | vs precio: {ind_d.get('price_vs_sma200_pct', 0):.1f}%" if ind_d.get('sma_200') else "- SMA 200: N/A",
+            f"- SMA 20: ${ind_d.get('sma_20', 'N/A'):.2f} | vs precio: {(ind_d.get('price_vs_sma20_pct') or 0):.1f}%" if ind_d.get('sma_20') else "- SMA 20: N/A",
+            f"- SMA 50: ${ind_d.get('sma_50', 'N/A'):.2f} | vs precio: {(ind_d.get('price_vs_sma50_pct') or 0):.1f}%" if ind_d.get('sma_50') else "- SMA 50: N/A",
+            f"- SMA 150: ${ind_d.get('sma_150', 'N/A'):.2f} | vs precio: {(ind_d.get('price_vs_sma150_pct') or 0):.1f}%" if ind_d.get('sma_150') else "- SMA 150: N/A",
+            f"- SMA 200: ${ind_d.get('sma_200', 'N/A'):.2f} | vs precio: {(ind_d.get('price_vs_sma200_pct') or 0):.1f}%" if ind_d.get('sma_200') else "- SMA 200: N/A",
             f"- EMA 8: ${ind_d.get('ema_8', 'N/A'):.2f}" if ind_d.get('ema_8') else "- EMA 8: N/A",
             f"- EMA 21: ${ind_d.get('ema_21', 'N/A'):.2f}" if ind_d.get('ema_21') else "- EMA 21: N/A",
             "",
             "## Momentum",
             f"- RSI 14: {ind_d.get('rsi_14', 'N/A'):.1f}" if ind_d.get('rsi_14') else "- RSI 14: N/A",
-            f"- MACD: {ind_d.get('macd', 0):.3f} | Signal: {ind_d.get('macd_signal', 0):.3f} | Hist: {ind_d.get('macd_hist', 0):.3f}" if ind_d.get('macd') else "- MACD: N/A",
-            f"- BB Width: {ind_d.get('bb_width', 0):.1f}% (squeeze si < 5%)" if ind_d.get('bb_width') else "- BB Width: N/A",
+            f"- MACD: {(ind_d.get('macd') or 0):.3f} | Signal: {(ind_d.get('macd_signal') or 0):.3f} | Hist: {(ind_d.get('macd_hist') or 0):.3f}" if ind_d.get('macd') else "- MACD: N/A",
+            f"- BB Width: {(ind_d.get('bb_width') or 0):.1f}% (squeeze si < 5%)" if ind_d.get('bb_width') else "- BB Width: N/A",
             f"- OBV Trend: {ind_d.get('obv_trend', 'N/A')}",
-            f"- Volumen relativo hoy: {ind_d.get('rel_volume', 1.0):.2f}x promedio 20d",
-            f"- ATR 14: ${ind_d.get('atr_14', 0):.2f} ({ind_d.get('atr_pct', 0):.1f}% del precio)" if ind_d.get('atr_14') else "",
+            f"- Volumen relativo hoy: {(ind_d.get('rel_volume') or 1.0):.2f}x promedio 20d",
+            f"- ATR 14: ${(ind_d.get('atr_14') or 0):.2f} ({(ind_d.get('atr_pct') or 0):.1f}% del precio)" if ind_d.get('atr_14') else "",
             "",
             "## Precio vs 52W",
-            f"- 52W High: ${ind_d.get('52w_high', 'N/A'):.2f} | Distancia: {ind_d.get('pct_from_52w_high', 0):.1f}%",
-            f"- 52W Low: ${ind_d.get('52w_low', 'N/A'):.2f} | Desde low: {ind_d.get('pct_from_52w_low', 0):.1f}%",
+            # Guardas: sin el `if`, un dato ausente devolvía el string 'N/A' y el
+            # formato :.2f lanzaba "Unknown format code 'f' for object of type
+            # 'str'", tumbando el agente completo (score 50 y sin análisis).
+            (f"- 52W High: ${ind_d.get('52w_high'):.2f} | Distancia: {ind_d.get('pct_from_52w_high') or 0:.1f}%"
+             if isinstance(ind_d.get('52w_high'), (int, float)) else "- 52W High: N/A"),
+            (f"- 52W Low: ${ind_d.get('52w_low'):.2f} | Desde low: {ind_d.get('pct_from_52w_low') or 0:.1f}%"
+             if isinstance(ind_d.get('52w_low'), (int, float)) else "- 52W Low: N/A"),
             "",
             "## Retornos",
             f"- 1 mes: {ind_d.get('return_1m', 'N/A'):.1f}%" if ind_d.get('return_1m') is not None else "- 1 mes: N/A",

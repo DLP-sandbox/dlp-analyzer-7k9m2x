@@ -31,25 +31,31 @@ PAGE_H = 1080.0
 MARGIN_X = 70.0
 MARGIN_Y = 60.0
 
-# ── Paleta (espejo de dashboard/styles.py) ──────────────────────────────
-BG_DEEP    = HexColor("#080B0F")
-BG_CARD    = HexColor("#141920")
-BG_CARD2   = HexColor("#1A2030")
-BG_CTA     = HexColor("#0F1419")
-ORANGE     = HexColor("#FFB84D")
-ORANGE_DK  = HexColor("#FFA500")
-GOLD       = HexColor("#FFD740")
-GREEN      = HexColor("#00FF88")
-GREEN_DK   = HexColor("#00C853")
-RED        = HexColor("#FF3B5C")
-RED_DK     = HexColor("#E53935")
-BLUE       = HexColor("#4A9EFF")
-BLUE_DK    = HexColor("#2196F3")
-TEXT_HI    = HexColor("#FFFFFF")
-TEXT_MD    = HexColor("#E4E7EC")
-TEXT_LO    = HexColor("#7A8898")
-TEXT_DIM   = HexColor("#5A6878")
-BORDER     = HexColor("#1E2530")
+# ── Paleta — espejo EXACTO de los tokens de dashboard/styles.py ──────────
+# El PDF se había quedado en la paleta neón anterior (naranja #FFB84D, verde
+# #00FF88, texto #E4E7EC) mientras la app pasó al "terminal sobrio" de oro
+# apagado. Al abrirlos juntos parecían dos productos distintos. Estos valores
+# son ahora los MISMOS tokens que usan styles.py y charts.py, así que el PDF y
+# la pantalla comparten identidad.
+BG_DEEP    = HexColor("#0A0B0D")   # --bg
+BG_CARD    = HexColor("#101216")   # --surface-1
+BG_CARD2   = HexColor("#15181D")   # --surface-2
+BG_CTA     = HexColor("#0D0F12")   # --surface-0
+BG_PANEL   = HexColor("#07080B")   # PANEL_BG — fondo de las gráficas de score
+ORANGE     = HexColor("#E2B25C")   # --accent (oro antiguo)
+ORANGE_DK  = HexColor("#C08E3B")   # --accent-deep
+GOLD       = HexColor("#F0C878")   # --accent-hi
+GREEN      = HexColor("#3DD68C")   # --pos
+GREEN_DK   = HexColor("#2FB374")
+RED        = HexColor("#F1495F")   # --neg
+RED_DK     = HexColor("#C93A4C")
+BLUE       = HexColor("#6FA3E0")   # --info
+BLUE_DK    = HexColor("#4E7CB0")
+TEXT_HI    = HexColor("#F2F3F5")   # --text-hi
+TEXT_MD    = HexColor("#C9CDD3")   # --text
+TEXT_LO    = HexColor("#8D949E")   # --text-2
+TEXT_DIM   = HexColor("#5E6570")   # --text-3
+BORDER     = HexColor("#232830")   # --border-solid
 
 
 # ── Sistema de tonos (calidad percibida) ─────────────────────────────────
@@ -807,6 +813,24 @@ def _chart_png(fig, width_px: int, height_px: int) -> Optional[ImageReader]:
         return None
 
 
+def _chart_png_fiel(fig, width_px: int, height_px: int, scale: int = 5) -> Optional[ImageReader]:
+    """Rasteriza una figura TAL COMO SE VE EN LA APP, solo a más resolución.
+
+    La diferencia con _chart_png es sutil pero decisiva: aquí se usa el tamaño
+    LÓGICO real del componente (≈500px) y se sube el `scale`, en vez de estirar
+    el lienzo a 2000px lógicos. Plotly dimensiona las fuentes en puntos sobre el
+    lienzo lógico, así que un lienzo enorme hace que una fuente de tamaño 11
+    —la que usa la app— salga como una mota. Con `scale` todo crece en
+    proporción: mismo diseño, misma identidad, cuatro veces más nítido.
+    """
+    try:
+        png_bytes = fig.to_image(format="png", width=width_px, height=height_px,
+                                 scale=scale, engine="kaleido")
+        return ImageReader(io.BytesIO(png_bytes))
+    except Exception:
+        return None
+
+
 # ── Logo procesado: bordes redondeados + halo glow ─────────────────────
 def _styled_logo_png(logo_path: Path, max_dim_px: int = 900,
                      corner_radius_pct: float = 0.10,
@@ -1035,34 +1059,12 @@ def _page_1_synthesis(c, a):
 
     try:
         from dashboard.charts import build_gauge
+        # Figura de la app SIN retoques: el tacómetro actual ya trae el arco con
+        # gradiente térmico, el número grande y la paleta oro. Los overrides que
+        # había aquí (paper_bgcolor #141920, tickfont #7A8898, barra #FFB84D)
+        # eran de la paleta ANTERIOR y desalineaban el PDF de la app.
         g_fig = build_gauge(sc_f if sc_f is not None else 50, rec)
-        g_fig.update_layout(
-            paper_bgcolor="#141920", plot_bgcolor="#141920",
-            margin=dict(l=60, r=60, t=40, b=40),
-            font=dict(family="Helvetica Neue, Helvetica, sans-serif",
-                      color="#E4E7EC", size=30),
-            height=520,
-        )
-        try:
-            g_fig.update_traces(
-                title={"text": ""},
-                gauge=dict(
-                    axis=dict(tickfont=dict(size=26, color="#7A8898")),
-                    # Glow: bar más gruesa + bordes brillantes en el threshold
-                    bar=dict(thickness=0.42, color=sc_color.hexval()[2:] if hasattr(sc_color, "hexval") else "#FFB84D"),
-                ),
-                selector=dict(type="indicator"),
-            )
-        except Exception:
-            pass
-        # Annotation del número grande
-        try:
-            for ann in g_fig.layout.annotations or []:
-                ann.font.size = 150
-                ann.y = 0.08
-        except Exception:
-            pass
-        g_png = _chart_png(g_fig, width_px=1200, height_px=1100)
+        g_png = _chart_png_fiel(g_fig, width_px=520, height_px=440, scale=6)
         if g_png:
             cw = panel_w - 40
             ch = mid_h - 90
@@ -1088,94 +1090,14 @@ def _page_1_synthesis(c, a):
 
     try:
         from dashboard.charts import build_snowflake
-        import plotly.graph_objects as go
+        # Se usa la figura de la app TAL CUAL. Antes aquí se reescribían los
+        # theta, el rango del eje, las fuentes y toda la paleta, y eso es lo que
+        # rompía el radar: el snowflake actual dibuja sus etiquetas como una
+        # TRAZA DE TEXTO a r=23.2 sobre un eje que llega a 28, así que al
+        # forzar range=[0,20] las etiquetas quedaban FUERA del área y
+        # desaparecían; además se pisaba la paleta nueva con la vieja.
         sf_fig = build_snowflake(a.snowflake or {})
-        # Sobrescribir labels: cortas, sin emojis, sin <b>N</b> embebido.
-        # CRECIMIENTO/MOMENTUM se acortan a 7 chars para que NO se corten
-        # contra el borde del card al renderizarse con font huge.
-        _short = ["VALOR", "CALIDAD", "CRECIM.", "IMPULSO", "FUTURO"]
-        _short_closed = _short + [_short[0]]
-        for tr in sf_fig.data:
-            if hasattr(tr, "theta") and tr.theta:
-                try:
-                    tr.theta = _short_closed
-                except Exception:
-                    pass
-        # Capa GLOW: añadir 2 trazas con líneas anchas semi-transparentes,
-        # luego reordenar (permutación) para que estén DETRÁS del trazo
-        # principal. Buscamos la traza con los valores reales (no la
-        # circular de range 20).
-        try:
-            data_trace_idx = None
-            for i, tr in enumerate(sf_fig.data):
-                r_vals = getattr(tr, "r", None) or ()
-                # La traza de datos NO es la circular de "20s"
-                if r_vals and not all(v == 20 for v in r_vals):
-                    data_trace_idx = i
-                    break
-            if data_trace_idx is not None:
-                src = sf_fig.data[data_trace_idx]
-                r, theta = src.r, src.theta
-                # Outer glow — añadir y luego mover delante
-                sf_fig.add_trace(go.Scatterpolar(
-                    r=r, theta=theta, mode="lines",
-                    line=dict(color="rgba(255,184,77,0.18)", width=28,
-                              shape="spline", smoothing=0.4),
-                    fill="toself", fillcolor="rgba(0,0,0,0)",
-                    showlegend=False, hoverinfo="skip",
-                ))
-                sf_fig.add_trace(go.Scatterpolar(
-                    r=r, theta=theta, mode="lines",
-                    line=dict(color="rgba(255,184,77,0.32)", width=14,
-                              shape="spline", smoothing=0.4),
-                    fill="toself", fillcolor="rgba(0,0,0,0)",
-                    showlegend=False, hoverinfo="skip",
-                ))
-                # Reordenar — glow traces (los 2 últimos) van al inicio
-                n = len(sf_fig.data)
-                glow_idx = (n - 2, n - 1)
-                rest_idx = tuple(i for i in range(n) if i not in glow_idx)
-                new_order = glow_idx + rest_idx
-                sf_fig.data = tuple(sf_fig.data[i] for i in new_order)
-        except Exception:
-            pass
-
-        sf_fig.update_layout(
-            paper_bgcolor="#141920", plot_bgcolor="#141920",
-            # Margins XL para que CRECIMIENTO/MOMENTUM/VALOR quepan completos
-            margin=dict(l=420, r=420, t=320, b=320),
-            font=dict(family="Helvetica Neue, Helvetica, sans-serif",
-                      color="#E4E7EC", size=110),
-            showlegend=False,
-            polar=dict(
-                bgcolor="#0F141A",
-                angularaxis=dict(
-                    # tickfont 110px — al embebed a 580pt da ~22pt visible
-                    tickfont=dict(size=110, color="#FFB84D",
-                                  family="Helvetica Neue, Helvetica"),
-                    linecolor="rgba(255,184,77,0.6)",
-                    gridcolor="#1E2530",
-                ),
-                radialaxis=dict(
-                    tickfont=dict(size=44, color="#7A8898"),
-                    gridcolor="#1E2530",
-                    showline=False,
-                    range=[0, 20],
-                ),
-            ),
-        )
-        # Refuerzo de la línea principal (la última traza, dibujada encima)
-        try:
-            main_idx = len(sf_fig.data) - 1
-            sf_fig.data[main_idx].line = dict(color="#FFB84D", width=6,
-                                              shape="spline", smoothing=0.4)
-            sf_fig.data[main_idx].marker = dict(size=22, color="#FFD740",
-                                                line=dict(width=3, color="white"))
-            sf_fig.data[main_idx].fillcolor = "rgba(255,184,77,0.30)"
-        except Exception:
-            pass
-        # Render a mayor resolución para que las labels enormes salgan nítidas
-        sf_png = _chart_png(sf_fig, width_px=2000, height_px=2000)
+        sf_png = _chart_png_fiel(sf_fig, width_px=520, height_px=460, scale=6)
         if sf_png:
             sf_size = min(panel_w - 60, mid_h - 110)
             sf_x = p2_x + (panel_w - sf_size) / 2
@@ -1204,41 +1126,25 @@ def _page_1_synthesis(c, a):
 
     try:
         from dashboard.charts import build_score_breakdown
-        sb_fig = build_score_breakdown(a.score_breakdown or {})
-        # Etiqueta en español (la app la nombra "Smart Money" en inglés)
+        # Figura de la app SIN retoques de paleta ni de ejes: el desglose actual
+        # ya trae los códigos dorados (FN/TC/FU/SM/CT/MC/SN/RS), las barras con
+        # esquinas redondeadas, el riel de fondo 0-100 y los VALORES A LA
+        # DERECHA. Lo único que se mantiene es traducir "Smart Money".
+        # Se reconstruye desde los REPORTES reales (igual que hace el Overview de
+        # la app): el score_breakdown que devuelve el modelo puede desviarse del
+        # puntaje que realmente sacó cada agente, y entonces el PDF y la pantalla
+        # mostraban cifras distintas para el mismo análisis.
+        _bd = dict(a.score_breakdown or {})
+        for _k in ("fundamentals", "technical", "future", "institutional",
+                   "catalysts", "macro", "sentiment", "risk"):
+            _rep = (a.reports or {}).get(_k)
+            if _rep is not None and getattr(_rep, "score", None) is not None:
+                _bd[_k] = _rep.score
+        sb_fig = build_score_breakdown(_bd)
         for _tr in sb_fig.data:
             if getattr(_tr, "y", None):
                 _tr.y = [str(_yy).replace("Smart Money", "Institucional") for _yy in _tr.y]
-        sb_fig.update_layout(
-            paper_bgcolor="#141920", plot_bgcolor="#141920",
-            # Margin izquierda XL para que los nombres de los agentes
-            # (Fundamentales, Catalizadores, Sentimiento) quepan completos
-            margin=dict(l=560, r=200, t=60, b=80),
-            font=dict(family="Helvetica Neue, Helvetica, sans-serif",
-                      color="#E4E7EC", size=80),
-            xaxis=dict(showgrid=True, gridcolor="#1E2530",
-                       tickfont=dict(size=56, color="#7A8898"),
-                       range=[0, 100], zeroline=False),
-            yaxis=dict(tickfont=dict(size=80, color="#E4E7EC",
-                                     family="Helvetica Neue, Helvetica")),
-            height=720,
-            showlegend=False,
-            bargap=0.18,  # barras más gruesas
-        )
-        try:
-            # Glow: bordes blancos GRUESOS + opacidad full + texto enorme
-            sb_fig.update_traces(
-                textposition="inside",
-                insidetextanchor="middle",
-                textfont=dict(size=72, color="white",
-                              family="Helvetica Neue, Helvetica"),
-                opacity=1.0,
-                marker=dict(line=dict(width=10,
-                                       color="rgba(255,255,255,0.25)")),
-            )
-        except Exception:
-            pass
-        sb_png = _chart_png(sb_fig, width_px=2000, height_px=2000)
+        sb_png = _chart_png_fiel(sb_fig, width_px=560, height_px=460, scale=6)
         if sb_png:
             cw = panel_w - 40
             ch = mid_h - 100
