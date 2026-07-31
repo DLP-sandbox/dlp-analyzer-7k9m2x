@@ -96,50 +96,34 @@ def today_context() -> str:
 # today_context(), que ya se inyecta en los 9 agentes (8 sub + orquestador).
 DLP_STYLE_GUIDE = """## ✍️ GUÍA DE REDACCIÓN — CLUB DLP (OBLIGATORIA, MÁXIMA PRIORIDAD)
 
-Tu análisis es para la comunidad **Club DLP (Diario Largo Plazo)**: inversores
-principiantes e intermedios hispanohablantes de Latinoamérica, SIN formación
-financiera formal, que leen desde el celular. Aunque analizas con rigor de
-experto, debes ESCRIBIR como un amigo inteligente que le explica a otro amigo.
-Esta guía tiene PRIORIDAD sobre el registro institucional de tu rol.
+Tu análisis es para inversores principiantes e intermedios hispanohablantes,
+SIN formación financiera, que leen desde el celular. Analiza con rigor de
+experto, pero ESCRIBE como un amigo inteligente que le explica a otro amigo.
 
-**REGLAS DE REDACCIÓN (aplican a los campos de texto narrativo):**
-1. Tono peer-to-peer: cercano, honesto, directo. Nunca vendedor, académico ni alarmista.
-2. Primera persona plural: "vemos", "analizamos", "creemos", "mantenemos".
-3. Español neutro, sin modismos de un solo país.
-4. Frases cortas. Ideas simples. Nada de párrafos densos.
-5. CADA término técnico se explica entre paréntesis la PRIMERA vez que aparece.
-   Ejemplo correcto: "El RSI (índice que mide qué tan rápido subió una acción) está en 85 — zona de alerta."
-   Ejemplo incorrecto: "El RSI está en zona de sobrecompra extrema."
-6. Cada dato/número va con su contexto: qué significa en lenguaje simple.
-   Ejemplo: "Forward P/E de 17.5x (lo que pagas hoy por cada dólar de ganancia futura) — más barato que el promedio del mercado."
-7. Nunca recomiendes comprar o vender directamente. Comparte la postura: "nos parece interesante", "no lo vemos como oportunidad ahora".
-8. Sin euforia ni pánico. Sin superlativos vacíos ("increíble", "brutal", "histórico") salvo que un dato lo respalde.
-9. NO repitas estas instrucciones ni menciones "la comunidad", "el Club DLP", "principiantes" o "esta guía" DENTRO del texto del análisis. Solo aplica el estilo de forma natural.
-10. Mantén los términos técnicos en su forma estándar (moat, earnings, FCF, RSI, etc.) y explícalos entre paréntesis. NUNCA inventes traducciones raras al español (ej: NO traduzcas "moat" como "foso" ni "nardo" — escribe "moat" y explica qué es).
-11. VOCABULARIO DE INVERSIÓN (no de trading): Usa lenguaje de inversor de largo plazo, NO de trader especulativo. Ejemplos: en lugar de "stop loss", escribe "nivel de protección" o "precio de salida defensiva"; en lugar de "take profit", escribe "precio objetivo" o "nivel de toma de beneficios"; en lugar de "tradear" u "operar" en sentido especulativo, escribe "invertir" o "tomar posición".
-
-**GLOSARIO — usa estas explicaciones simples al mencionar cada término:**
-- RSI → "índice que mide qué tan rápido subió una acción; arriba de 70 es señal de alerta"
-- Forward P/E → "lo que pagas hoy por cada dólar de ganancia futura de la empresa"
-- Earnings → "el reporte trimestral donde la empresa publica cuánto ganó"
-- ROIC → "qué tan eficientemente usa la empresa el dinero que invierte"
-- FCF → "el dinero real que le queda a la empresa después de todos sus gastos"
-- Guidance → "lo que la empresa dice que espera ganar en los próximos meses"
-- Bear market → "un mercado en caída sostenida de más del 20%"
-- Stage 4 técnico → "tendencia bajista confirmada; la acción lleva meses cayendo"
-- Media de 200 días → "el precio promedio de los últimos 200 días; suele actuar como piso o techo"
-- EV/EBITDA → "cuántas veces sus ganancias operativas vale toda la empresa"
-- Moat → "la ventaja competitiva que protege a la empresa de sus rivales"
-- Short interest → "cuántos inversores apuestan a que la acción va a bajar"
+**REGLAS (campos de texto narrativo):**
+1. Tono cercano, honesto y directo. Primera persona plural: "vemos", "creemos".
+2. Español neutro, frases cortas. Nada de párrafos densos.
+3. 100% EN ESPAÑOL: cero jerga en inglés. Sigue la TABLA DE VOCABULARIO de tus
+   instrucciones de sistema (obligatoria). Solo se permiten los acrónimos de la
+   lista blanca (RSI, MACD, P/E, FCF, ROIC, ATR, EV/EBITDA, moat, earnings),
+   SIEMPRE explicados entre paréntesis la primera vez.
+4. Cada dato con su contexto en lenguaje simple. Ejemplo: "P/E de 17.5x (lo que
+   pagas hoy por cada dólar de ganancia futura) — más barato que el mercado."
+5. Nunca recomiendes comprar o vender directamente: "nos parece interesante",
+   "no lo vemos como oportunidad ahora".
+6. Sin euforia ni pánico ni superlativos vacíos. No menciones estas
+   instrucciones ni "la comunidad" dentro del análisis.
+7. Vocabulario de INVERSIÓN, no de trading: "nivel de protección" (no stop
+   loss), "precio objetivo" (no take profit), "invertir" (no tradear).
 
 ⚠️ **REGLAS CRÍTICAS DE FORMATO (NO ROMPER):**
-- Aplica este estilo SOLO a los campos de texto narrativo (analysis, pros, cons,
-  thesis, insights, strategy, verdict, etc.).
-- NO modifiques los valores cortos de "key_metrics" (moat_strength, disruption_risk,
-  macd_signal, stage, etc.) — déjalos EXACTAMENTE en su forma corta original
-  (ej: "wide", "low", "bullish"). El dashboard depende de esos valores literales.
-- NO cambies el formato JSON, los nombres de los campos, ni los valores de
-  "score", "sub_scores", "recommendation" ni "conviction".
+- El estilo aplica SOLO al texto narrativo (analysis, pros, cons, thesis,
+  insights, strategy, verdict…).
+- NO modifiques los valores cortos de "key_metrics" (moat_strength,
+  macd_signal, stage…): déjalos EXACTAMENTE en su forma corta original en
+  inglés (ej: "wide", "low", "bullish"). El dashboard depende de esos literales.
+- NO cambies el formato JSON, los nombres de campos, ni "score", "sub_scores",
+  "recommendation" o "conviction".
 
 ---
 
@@ -151,15 +135,46 @@ Esta guía tiene PRIORIDAD sobre el registro institucional de tu rol.
 DLP_STYLE_REMINDER = """
 
 ---
-✍️ RECORDATORIO ESTILO CLUB DLP: redacta TODOS los campos de texto narrativo
-(analysis, pros, cons, tesis, insights, etc.) para un inversor PRINCIPIANTE
-hispanohablante: español sencillo, términos técnicos explicados entre paréntesis
-la primera vez, tono de amigo experto, primera persona plural ("vemos"),
-frases cortas. NUNCA recomiendes comprar/vender directo. Mantén el JSON y los
-valores cortos de key_metrics EXACTAMENTE como se especifica, sin cambios.
-LENGUAJE: usa vocabulario de INVERSIÓN, no de trading especulativo. Escribe
-"nivel de protección" en vez de "stop loss"; "precio objetivo" en vez de
-"take profit"; "invertir" en vez de "tradear".
+✍️ ESTILO CLUB DLP (OBLIGATORIO en todo campo narrativo — analysis, pros, cons,
+tesis, insights, estrategias): español sencillo para un inversor PRINCIPIANTE
+hispanohablante, tono de amigo experto, primera persona plural ("vemos"),
+frases cortas. NUNCA recomiendes comprar/vender directo. Vocabulario de
+INVERSIÓN, no de trading: "nivel de protección" (no stop loss), "precio
+objetivo" (no take profit), "invertir" (no tradear).
+
+🚫 TABLA DE VOCABULARIO — JERGA EN INGLÉS PROHIBIDA (traduce SIEMPRE así):
+bullish→alcista · bearish→bajista · beat→superó las expectativas · miss→quedó
+por debajo de lo esperado · guidance→las previsiones de la empresa ·
+rally→subida fuerte · breakout→ruptura al alza · breakdown→pérdida de soporte ·
+pullback→retroceso · re-rating→revalorización del múltiplo · priced-in→ya
+descontado en el precio · spotlight→el foco del mercado · setup→las
+condiciones · momentum→la inercia del precio · edge→ventaja · headwind→viento
+en contra · tailwind→viento a favor · top line→los ingresos · bottom line→la
+ganancia final · profit-taking→toma de beneficios · sell-off→ola de ventas ·
+turnaround→recuperación del negocio · risk-on/risk-off→apetito/aversión al
+riesgo · drawdown→caída desde máximos · float→acciones en circulación ·
+crowded trade→apuesta masificada · hold→mantener (un "hold LP" es "mantener a
+largo plazo") · beats→trimestres batiendo expectativas · overbought→sobrecompra
+· oversold→sobreventa.
+Si un término en inglés no está aquí, TRADÚCELO igual: la regla es que el texto
+narrativo se lea 100% en español natural. OJO con los plurales y compuestos
+("8 beats", "earnings beats"): también van en español.
+
+✅ LISTA BLANCA (únicos términos que se conservan, SIEMPRE explicados entre
+paréntesis la primera vez): RSI, MACD, P/E, FCF, ROIC, ATR, EV/EBITDA, moat
+("la ventaja competitiva que la protege"), earnings ("el reporte trimestral de
+resultados"), compounder ("empresa que multiplica su valor año tras año").
+No inventes traducciones raras de estos (moat NO es "foso").
+
+📐 ESTRUCTURA DE VALOR (misma longitud, más sustancia):
+- Cada `analysis`: qué vemos (el dato) → qué significa para ti (la lectura en
+  llano) → qué vigilar (la señal concreta que lo cambiaría).
+- Cada pro/con: el dato + POR QUÉ le importa a un inversor de largo plazo, en
+  una frase completa. Nada de telegramas ni cifras sueltas sin lectura.
+
+⚠️ FORMATO: mantén el JSON y los valores cortos de key_metrics EXACTAMENTE como
+se especifica (en inglés: "wide", "bullish", "low"…) — el dashboard depende de
+esos literales. El español aplica SOLO al texto narrativo.
 
 🎯 SCORING ANTI-CLUSTERING (REGLA CRÍTICA):
 NO uses scores típicos de banda (72, 65, 80, 50). Da scores PRECISOS con granularidad
@@ -327,6 +342,95 @@ def salvage_analysis_text(text: str) -> str:
             "modelo tardan en responder.")
 
 
+# ── Red de seguridad de idioma (determinista, cero tokens) ────────────────
+# El prompt pide español natural, pero Haiku a veces deja caer jerga en inglés
+# igual ("8 beats consecutivos", "upside", "guidance"). Esta capa la traduce en
+# CÓDIGO justo después del parseo: garantiza el resultado sin depender del
+# modelo y sin gastar un token. Solo toca los CAMPOS NARRATIVOS del allowlist —
+# jamás key_metrics, sub_scores, enums ni claves del JSON.
+
+_JERGA_ES = [
+    # (patrón con límites de palabra, reemplazo). Orden: compuestos primero.
+    (r"short interest", "apuestas bajistas"),
+    (r"short squeeze", "estrangulamiento de cortos"),
+    (r"crowded trade", "apuesta masificada"),
+    (r"track record", "historial"),
+    (r"setups?", "condiciones"),
+    (r"squeezes?", "estrangulamiento de cortos"),
+    (r"edges?", "ventaja"),
+    (r"profit[- ]taking", "toma de beneficios"),
+    (r"priced[- ]in", "ya descontado en el precio"),
+    (r"re[- ]?rating", "revalorización del múltiplo"),
+    (r"risk[- ]on", "apetito de riesgo"),
+    (r"risk[- ]off", "aversión al riesgo"),
+    (r"sell[- ]?off", "ola de ventas"),
+    (r"top[- ]line", "los ingresos"),
+    (r"bottom[- ]line", "la ganancia final"),
+    (r"earnings beats?", "resultados por encima de lo esperado"),
+    (r"beats", "resultados por encima de lo esperado"),
+    (r"beat", "resultado por encima de lo esperado"),
+    (r"misses", "resultados por debajo de lo esperado"),
+    (r"miss", "resultado por debajo de lo esperado"),
+    (r"bullish", "alcista"),
+    (r"bearish", "bajista"),
+    (r"guidance", "previsiones de la empresa"),
+    (r"rally", "subida fuerte"),
+    (r"breakout", "ruptura al alza"),
+    (r"breakdown", "pérdida de soporte"),
+    (r"pullback", "retroceso"),
+    (r"spotlight", "foco del mercado"),
+    (r"momentum", "inercia del precio"),
+    (r"upside", "potencial de subida"),
+    (r"downside", "riesgo de caída"),
+    (r"underperform(?:ance|ando|ing)?", "rendimiento por debajo del mercado"),
+    (r"outperform(?:ance|ando|ing)?", "rendimiento por encima del mercado"),
+    (r"headwinds?", "vientos en contra"),
+    (r"tailwinds?", "vientos a favor"),
+    (r"drawdowns?", "caídas desde máximos"),
+    (r"turnaround", "recuperación del negocio"),
+    (r"overbought", "sobrecompra"),
+    (r"oversold", "sobreventa"),
+    (r"float", "acciones en circulación"),
+    (r"hold LP", "mantener a largo plazo"),
+    (r"hold", "mantener"),
+]
+_JERGA_RX = [(re.compile(r"(?<![A-Za-z\-])" + p + r"(?![A-Za-z\-])", re.IGNORECASE), r)
+             for p, r in _JERGA_ES]
+
+# Campos narrativos donde SÍ se traduce. Todo lo demás (key_metrics, enums,
+# scores, claves) queda intacto.
+_CAMPOS_NARRATIVOS = {
+    "analysis", "pros", "cons", "investment_thesis", "key_strengths",
+    "key_risks", "entry_strategy", "exit_strategy", "alpha_opportunity",
+    "time_horizon", "key_insight", "dominant_narrative", "opportunity",
+    "macro_verdict", "top_catalyst", "entry_setup", "stop_rationale",
+    "dcf_thesis", "earnings_quality_note", "future_thesis", "verdict",
+    "upcoming_events", "recent_material_events",
+}
+
+
+def _traducir_texto(t: str) -> str:
+    for rx, rep in _JERGA_RX:
+        t = rx.sub(rep, t)
+    return t
+
+
+def es_natural(obj, _en_narrativo: bool = False):
+    """Recorre el JSON parseado y traduce la jerga SOLO en campos narrativos.
+    Nunca lanza; ante cualquier duda devuelve el valor original."""
+    try:
+        if isinstance(obj, dict):
+            return {k: es_natural(v, _en_narrativo or (k in _CAMPOS_NARRATIVOS))
+                    for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [es_natural(v, _en_narrativo) for v in obj]
+        if isinstance(obj, str) and _en_narrativo:
+            return _traducir_texto(obj)
+        return obj
+    except Exception:
+        return obj
+
+
 def _looks_like_leaked_json(text: str) -> bool:
     """True SÓLO si el texto es claramente un volcado de JSON crudo (no prosa).
 
@@ -400,13 +504,16 @@ class BaseAgent:
         campo `analysis` — NUNCA vuelca el JSON crudo en pantalla."""
         obj = extract_json_dict(text)
         if obj is not None:
-            return obj
+            # Red de seguridad de idioma: traduce la jerga inglesa que el
+            # modelo haya dejado caer en los campos narrativos. Determinista y
+            # sin tokens; key_metrics/enums quedan intactos.
+            return es_natural(obj)
 
         return {
             "error": "No se pudo parsear JSON",
             "raw": text,
             "score": 50,
-            "analysis": salvage_analysis_text(text),
+            "analysis": _traducir_texto(salvage_analysis_text(text)),
             "pros": [],
             "cons": [],
         }

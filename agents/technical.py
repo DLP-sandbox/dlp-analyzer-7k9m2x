@@ -17,13 +17,13 @@ SYSTEM_PROMPT = """Eres el analista técnico jefe de un hedge fund cuantitativo.
 Tu análisis sigue el método de Mark Minervini (SEPA), Jesse Livermore y William O'Neil (CAN SLIM).
 
 Evalúas:
-1. STAGE ANALYSIS: Stage 2 (alcista, ideal para comprar) o no
-2. TREND QUALITY: posición del precio respecto a MAs 50/150/200 diario y semanal
-3. MOMENTUM: RSI, MACD, histograma — ¿hay momentum acelerado o desacelerando?
-4. SETUP DE ENTRADA: ¿está en base tight? ¿hay patrón VCP, cup & handle, flat base?
+1. FASE DE LA TENDENCIA (Stage Analysis): ¿está en Stage 2 (alcista, ideal para comprar) o no?
+2. CALIDAD DE LA TENDENCIA: posición del precio respecto a las medias de 50/150/200 en diario y semanal
+3. IMPULSO (momentum): RSI, MACD e histograma — ¿la subida acelera o pierde fuerza?
+4. CONDICIONES DE ENTRADA: ¿consolida en una base estrecha? ¿hay patrón de contracción de volatilidad (VCP), taza con asa o base plana?
 5. VOLUMEN: confirmación de tendencia con OBV y volumen relativo
-6. RELATIVE STRENGTH: ¿outperforma el S&P500 en 1M/3M/6M?
-7. RIESGO DE ENTRADA: distancia al nivel de protección técnico (mínimo swing o MA 50W), R/R potencial
+6. FORTALEZA RELATIVA: ¿le gana al S&P 500 en 1M/3M/6M?
+7. RIESGO DE ENTRADA: distancia al nivel de protección técnico (mínimo reciente o media de 50 semanas), relación riesgo/beneficio
 
 Criterios de scoring (escala continua 0-100, granular, sin clustering):
 - 82-95: Stage 2 + bien posicionado vs MAs + RS fuerte + volumen confirmando. El score exacto depende de qué tan limpia esté la estructura.
@@ -140,7 +140,7 @@ class TechnicalAgent(BaseAgent):
             f"- EMA 8: ${ind_d.get('ema_8', 'N/A'):.2f}" if ind_d.get('ema_8') else "- EMA 8: N/A",
             f"- EMA 21: ${ind_d.get('ema_21', 'N/A'):.2f}" if ind_d.get('ema_21') else "- EMA 21: N/A",
             "",
-            "## Momentum",
+            "## Impulso (momentum)",
             f"- RSI 14: {ind_d.get('rsi_14', 'N/A'):.1f}" if ind_d.get('rsi_14') else "- RSI 14: N/A",
             f"- MACD: {(ind_d.get('macd') or 0):.3f} | Signal: {(ind_d.get('macd_signal') or 0):.3f} | Hist: {(ind_d.get('macd_hist') or 0):.3f}" if ind_d.get('macd') else "- MACD: N/A",
             f"- BB Width: {(ind_d.get('bb_width') or 0):.1f}% (squeeze si < 5%)" if ind_d.get('bb_width') else "- BB Width: N/A",

@@ -27,12 +27,12 @@ ORCHESTRATOR_SYSTEM = """Eres el Chief Investment Officer de un hedge fund de é
 
 FILOSOFÍA DE INVERSIÓN DUAL:
 1. CALIDAD A LARGO PLAZO (3-7 años): compounders con moats estructurales (Microsoft, Visa, ASML, Mastercard, Adobe, Costco) merecen scores altos AUNQUE el timing técnico no sea ideal. Su composición a 15-20% anual durante décadas SUPERA cualquier consideración de entrada táctica.
-2. ASIMETRÍA INMEDIATA: identifica si la situación ACTUAL del precio ofrece asimetría al alza (upside > downside), a la baja, o balanceada. Esto NO afecta la calidad LP — solo informa el timing.
+2. ASIMETRÍA INMEDIATA: identifica si la situación ACTUAL del precio ofrece asimetría al alza (el potencial de subida supera al riesgo de caída), a la baja, o equilibrada. Esto NO afecta la calidad LP — solo informa el momento de entrada.
 
 Tu proceso de pensamiento:
 1. LEE cada reporte con escepticismo inteligente
 2. IDENTIFICA la calidad estructural (fundamentals + future) — ¿es best-in-class?
-3. IDENTIFICA la asimetría actual (risk + technical) — ¿upside, downside o balanced?
+3. IDENTIFICA la asimetría actual (riesgo + técnico) — ¿favorece la subida, la caída, o está equilibrada?
 4. BUSCA CONVERGENCIA: cuando calidad LP alta + asimetría al alza → conviction máxima
 5. GENERA LA TESIS: EXACTAMENTE 2 párrafos, MÁXIMO 10 líneas en total. Sé conciso y de alto nivel — los detalles van en otros campos. Párrafo 1: calidad estructural + valoración. Párrafo 2: asimetría actual + recomendación práctica.
 6. DEFINE LA RECOMENDACIÓN
@@ -454,9 +454,11 @@ class Orchestrator:
     def _parse_json(self, text: str) -> dict:
         # Parseo robusto compartido: tolera saltos de línea literales dentro de
         # los strings (ej: la tesis en 2 párrafos) y repara JSON truncado.
-        from agents.base import extract_json_dict
+        # es_natural = red de seguridad de idioma (traduce jerga inglesa en los
+        # campos narrativos; tesis/estrategias incluidos). Cero tokens.
+        from agents.base import extract_json_dict, es_natural
         obj = extract_json_dict(text)
-        return obj if obj is not None else {}
+        return es_natural(obj) if obj is not None else {}
 
     def _score_to_recommendation(self, score: float) -> str:
         if score >= THRESHOLDS["MUY ATRACTIVO"]:

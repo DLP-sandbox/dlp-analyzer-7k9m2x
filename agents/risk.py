@@ -200,8 +200,8 @@ class RiskAgent(BaseAgent):
             # Guardas: sin el `if`, un dato ausente devolvía el string 'N/A' y el
             # formato :.2f lanzaba "Unknown format code 'f' for object of type
             # 'str'", tumbando el agente completo (sin stop, target ni R/R).
-            (f"- Swing Low 10W: ${risk.get('swing_low_10w'):.2f}"
-             if isinstance(risk.get('swing_low_10w'), (int, float)) else "- Swing Low 10W: N/A"),
+            (f"- Mínimo de 10 semanas (swing low): ${risk.get('swing_low_10w'):.2f}"
+             if isinstance(risk.get('swing_low_10w'), (int, float)) else "- Mínimo de 10 semanas: N/A"),
             (f"- Nivel de Protección Sugerido (cuantitativo): ${risk.get('stop_suggested'):.2f}"
              if isinstance(risk.get('stop_suggested'), (int, float)) else "- Nivel de Protección Sugerido: N/A"),
             f"- Riesgo al nivel de protección: -{risk.get('risk_pct') or 0:.1f}%",

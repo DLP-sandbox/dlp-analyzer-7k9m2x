@@ -18,7 +18,7 @@ Debes analizar:
 3. RETORNO SOBRE CAPITAL: ROE, ROIC (>15% es excelente, >20% es excepcional, >25% es best-in-class)
 4. SOLIDEZ FINANCIERA: deuda/equity, current ratio, FCF positivo y creciente
 5. VALORACIÓN RELATIVA: P/E, P/S, EV/EBITDA, FCF yield vs sector y vs historia
-6. CALIDAD DE EARNINGS: historial de beats/misses, consistencia de guidance
+6. CALIDAD DE LOS RESULTADOS: historial de trimestres batiendo o fallando expectativas, consistencia de las previsiones
 7. PIOTROSKI F-SCORE aproximado (0-9): señales de mejora en rentabilidad y apalancamiento
 
 Retorna SIEMPRE este JSON exacto (sin markdown adicional fuera del bloque):
@@ -208,8 +208,8 @@ class FundamentalsAgent(BaseAgent):
         if eh:
             lines.append("")
             lines.append(f"## Historial Earnings (últimos {len(eh)} quarters)")
-            lines.append(f"- Promedio surprise: {(earnings.get('avg_surprise') or 0):.1f}%")
-            lines.append(f"- Beats consecutivos: {earnings.get('beat_count', 0)}/{len(eh)}")
+            lines.append(f"- Sorpresa media: {(earnings.get('avg_surprise') or 0):.1f}%")
+            lines.append(f"- Trimestres batiendo expectativas: {earnings.get('beat_count', 0)}/{len(eh)}")
             lines.append(f"- Próximos earnings: {earnings.get('next_earnings', 'N/A')}")
             for e in eh[:4]:
                 lines.append(f"  • {e['date']}: Est ${e['estimate']:.2f} → Act ${e['actual']:.2f} ({'+' if e['surprise_pct'] > 0 else ''}{e['surprise_pct']:.1f}%)")

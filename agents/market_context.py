@@ -291,18 +291,18 @@ class MarketContextAgent(BaseAgent):
         # ── Earnings (para catalizadores) ──
         lines += [
             "",
-            "## 2) CATALIZADORES — Earnings & Eventos (calculado desde HOY)",
-            f"- Próximos Earnings: **{earnings.get('next_earnings', 'N/A')}** "
+            "## 2) CATALIZADORES — Resultados y eventos (calculado desde HOY)",
+            f"- Próximo reporte de resultados: **{earnings.get('next_earnings', 'N/A')}** "
             f"({earnings.get('days_to_next_earnings', 'N/A')} días) "
             f"{earnings.get('next_earnings_proximity', '')}",
-            f"- Beats recientes: {earnings.get('beat_count', 'N/A')} | "
-            f"Surprise promedio: {(earnings.get('avg_surprise') or 0):.1f}%"
+            f"- Trimestres superando expectativas: {earnings.get('beat_count', 'N/A')} | "
+            f"Sorpresa media: {(earnings.get('avg_surprise') or 0):.1f}%"
             if earnings.get('avg_surprise') is not None else
-            f"- Beats recientes: {earnings.get('beat_count', 'N/A')} | Surprise promedio: N/A",
+            f"- Trimestres superando expectativas: {earnings.get('beat_count', 'N/A')} | Sorpresa media: N/A",
         ]
         eh = earnings.get("earnings_history", [])
         if eh:
-            lines.append("### Historial Earnings:")
+            lines.append("### Historial de resultados:")
             for e in eh[:5]:
                 sign = "+" if e["surprise_pct"] > 0 else ""
                 lines.append(f"- {e['date']}: Est ${e['estimate']:.2f} → Act ${e['actual']:.2f} ({sign}{e['surprise_pct']:.1f}%)")

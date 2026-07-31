@@ -80,7 +80,7 @@ class InstitutionalAgent(BaseAgent):
         lines = [
             f"# Análisis de Flujo Institucional: {ticker} — {info.get('name', ticker)}",
             f"**Sector:** {info.get('sector')} | **Market Cap:** ${info.get('market_cap', 0) / 1e9:.1f}B",
-            f"**Short Ratio (days to cover):** {info.get('short_ratio', 'N/A')}",
+            f"**Ratio de cortos (días que tardarían en cubrirse):** {info.get('short_ratio', 'N/A')}",
             f"**Short % del Float:** {(info.get('short_percent', 0) or 0) * 100:.1f}%",
             f"**Float Shares:** {info.get('float_shares', 0) / 1e6:.1f}M" if info.get('float_shares') else "**Float Shares:** N/A",
             "",
