@@ -920,7 +920,7 @@ def _qr_image(url: str, size_px: int = 480) -> Optional[ImageReader]:
         )
         qr.add_data(url)
         qr.make(fit=True)
-        img = qr.make_image(fill_color="#FFB84D", back_color="#0F1419")
+        img = qr.make_image(fill_color="#E2B25C", back_color="#0D0F12")
         pil = img.get_image() if hasattr(img, "get_image") else img
         pil = pil.convert("RGB").resize((size_px, size_px), PILImage.LANCZOS)
         buf = io.BytesIO()
@@ -1282,7 +1282,7 @@ def _verdict_trend(score, stage_value):
     s = _to_float(score, default=50.0)
     stage = str(stage_value or "").lower()
     if "2" in stage or s >= 70: return "Tendencia alcista clara", GREEN
-    if "3" in stage: return "Distribución — momentum agotándose", ORANGE
+    if "3" in stage: return "Distribución — el impulso se agota", ORANGE
     if "4" in stage or s < 35: return "Tendencia bajista en curso", RED
     if s >= 55: return "Tendencia alcista moderada", GREEN
     if s >= 45: return "Tendencia lateral — sin dirección clara", ORANGE
@@ -1315,11 +1315,13 @@ def _build_simple_price_chart(a):
     fig = go.Figure()
 
     # Glow sutil (una sola capa tenue — antes había 2 capas gruesas que se
-    # veían como un halo pesado poco elegante)
+    # veían como un halo pesado poco elegante).
+    # Paleta = tokens de la app (oro #E2B25C): antes iba hardcodeada la paleta
+    # neón vieja (#FFB84D) y la alineación global de constantes no llegaba aquí.
     fig.add_trace(go.Scatter(
         x=dates, y=prices,
         mode="lines",
-        line=dict(color="rgba(255,184,77,0.14)", width=11,
+        line=dict(color="rgba(226,178,92,0.14)", width=11,
                   shape="spline", smoothing=0.5),
         hoverinfo="skip", showlegend=False,
     ))
@@ -1327,17 +1329,17 @@ def _build_simple_price_chart(a):
     fig.add_trace(go.Scatter(
         x=dates, y=prices,
         mode="lines",
-        line=dict(color="#FFB84D", width=3.5,
+        line=dict(color="#E2B25C", width=3.5,
                   shape="spline", smoothing=0.5),
         fill="tozeroy",
-        fillcolor="rgba(255,184,77,0.08)",
+        fillcolor="rgba(226,178,92,0.08)",
         hoverinfo="skip", showlegend=False,
     ))
     # Marker del precio actual (punto vivo discreto)
     fig.add_trace(go.Scatter(
         x=[dates[-1]], y=[prices[-1]],
         mode="markers",
-        marker=dict(size=16, color="#FFD740",
+        marker=dict(size=16, color="#F0C878",
                     line=dict(width=3, color="white")),
         hoverinfo="skip", showlegend=False,
     ))
@@ -1345,17 +1347,17 @@ def _build_simple_price_chart(a):
     min_p, max_p = min(prices), max(prices)
     pad = (max_p - min_p) * 0.12
     fig.update_layout(
-        paper_bgcolor="#141920", plot_bgcolor="#141920",
+        paper_bgcolor="#101216", plot_bgcolor="#101216",
         margin=dict(l=110, r=80, t=50, b=60),
-        font=dict(family="Helvetica", color="#E4E7EC", size=24),
+        font=dict(family="Helvetica", color="#C9CDD3", size=24),
         xaxis=dict(
             showgrid=False, showline=False,
-            tickfont=dict(size=20, color="#7A8898"),
+            tickfont=dict(size=20, color="#8D949E"),
             tickformat="%b %Y", nticks=6,
         ),
         yaxis=dict(
-            showgrid=True, gridcolor="#1E2530", gridwidth=1,
-            tickfont=dict(size=20, color="#7A8898"),
+            showgrid=True, gridcolor="rgba(255,255,255,0.06)", gridwidth=1,
+            tickfont=dict(size=20, color="#8D949E"),
             tickprefix="$", range=[max(0, min_p - pad), max_p + pad],
         ),
         showlegend=False,
@@ -1792,71 +1794,92 @@ def _build_price_journey_chart(a):
     pot_f  = _to_float(a.target_price)
 
     fig = go.Figure()
-    # Glow exterior + interior + línea + fill (igual que el simple chart)
+    # Paleta = tokens de la app (oro #E2B25C / verde #3DD68C / rojo #F1495F).
+    # Antes iba hardcodeada la paleta neón vieja (#FFB84D/#00FF88/#FF3B5C) y la
+    # alineación global de constantes no llegaba aquí.
     fig.add_trace(go.Scatter(x=dates, y=prices, mode="lines",
-        line=dict(color="rgba(255,184,77,0.14)", width=11, shape="spline", smoothing=0.5),
+        line=dict(color="rgba(226,178,92,0.14)", width=11, shape="spline", smoothing=0.5),
         hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(x=dates, y=prices, mode="lines",
-        line=dict(color="rgba(255,184,77,0.0)", width=1, shape="spline", smoothing=0.5),
+        line=dict(color="rgba(226,178,92,0.0)", width=1, shape="spline", smoothing=0.5),
         hoverinfo="skip", showlegend=False))
     fig.add_trace(go.Scatter(x=dates, y=prices, mode="lines",
-        line=dict(color="#FFB84D", width=3.5, shape="spline", smoothing=0.5),
-        fill="tozeroy", fillcolor="rgba(255,184,77,0.08)",
+        line=dict(color="#E2B25C", width=3.5, shape="spline", smoothing=0.5),
+        fill="tozeroy", fillcolor="rgba(226,178,92,0.08)",
         hoverinfo="skip", showlegend=False))
     # Marker del precio actual
     fig.add_trace(go.Scatter(x=[dates[-1]], y=[prices[-1]], mode="markers",
-        marker=dict(size=16, color="#FFD740", line=dict(width=3, color="white")),
+        marker=dict(size=16, color="#F0C878", line=dict(width=3, color="white")),
         hoverinfo="skip", showlegend=False))
 
-    # Líneas horizontales para min/actual/potencial
-    shapes = []
-    annotations = []
-    last_date = dates[-1]
-    if cur_f is not None:
-        shapes.append(dict(type="line", x0=dates[0], x1=last_date,
-                            y0=cur_f, y1=cur_f, xref="x", yref="y",
-                            line=dict(color="#FFB84D", width=2, dash="dot")))
-        annotations.append(dict(x=1, xref="paper", y=cur_f, yref="y",
-                                xanchor="left", yanchor="middle",
-                                text=f"  <b>Actual</b><br>  ${cur_f:,.0f}",
-                                showarrow=False,
-                                font=dict(size=22, color="#FFB84D",
-                                          family="Helvetica-Bold")))
-    if min_f is not None:
-        shapes.append(dict(type="line", x0=dates[0], x1=last_date,
-                            y0=min_f, y1=min_f, xref="x", yref="y",
-                            line=dict(color="#FF3B5C", width=2, dash="dash")))
-        annotations.append(dict(x=1, xref="paper", y=min_f, yref="y",
-                                xanchor="left", yanchor="middle",
-                                text=f"  <b>Mínimo</b><br>  ${min_f:,.0f}",
-                                showarrow=False,
-                                font=dict(size=22, color="#FF3B5C",
-                                          family="Helvetica-Bold")))
-    if pot_f is not None:
-        shapes.append(dict(type="line", x0=dates[0], x1=last_date,
-                            y0=pot_f, y1=pot_f, xref="x", yref="y",
-                            line=dict(color="#00FF88", width=2, dash="dash")))
-        annotations.append(dict(x=1, xref="paper", y=pot_f, yref="y",
-                                xanchor="left", yanchor="middle",
-                                text=f"  <b>Potencial</b><br>  ${pot_f:,.0f}",
-                                showarrow=False,
-                                font=dict(size=22, color="#00FF88",
-                                          family="Helvetica-Bold")))
-
+    # El rango del eje se calcula ANTES de colocar las etiquetas: el algoritmo
+    # anti-colisión necesita saber cuánto mide una "altura de etiqueta" en
+    # unidades de precio.
     all_pts = prices + [v for v in (cur_f, min_f, pot_f) if v is not None]
     min_p, max_p = min(all_pts), max(all_pts)
     pad = (max_p - min_p) * 0.08
+    y_lo = max(0, min_p - pad)
+    y_hi = max_p + pad
+    y_span = (y_hi - y_lo) or 1.0
+
+    # ── Líneas horizontales + etiquetas SIN SOLAPES ─────────────────────────
+    # La línea punteada se queda SIEMPRE en su precio real. Lo que se separa es
+    # la ETIQUETA: si dos precios caen cerca (típico: Actual y Mínimo con un
+    # stop del −5%), las cajas de texto de dos líneas se pisaban una a otra.
+    # Algoritmo: ordenar por precio y aplicar una pasada hacia arriba que impone
+    # una separación mínima, luego reencajar el grupo dentro del eje si el
+    # empuje lo sacó. La separación es el 20% del rango: medido en el PDF real,
+    # una etiqueta de DOS líneas a size 20 ocupa ~14.5% del eje (la figura se
+    # rasteriza a ~510px con ~410px de área útil), así que 15% dejaba las cajas
+    # BESÁNDOSE (visto con PEP: Actual $137 / Mínimo $131). Con 20% queda un
+    # hueco real de ~22px incluso en el peor caso de tres etiquetas seguidas.
+    niveles = [(v, nombre, color, dash) for v, nombre, color, dash in (
+        (min_f, "Mínimo",    "#F1495F", "dash"),
+        (cur_f, "Actual",    "#E2B25C", "dot"),
+        (pot_f, "Potencial", "#3DD68C", "dash"),
+    ) if v is not None]
+    niveles.sort(key=lambda n: n[0])
+
+    MIN_SEP = y_span * 0.20
+    label_y = [n[0] for n in niveles]
+    for i in range(1, len(label_y)):
+        if label_y[i] - label_y[i - 1] < MIN_SEP:
+            label_y[i] = label_y[i - 1] + MIN_SEP
+    # Si el empuje sacó la última etiqueta por arriba, bajar el grupo entero y
+    # re-imponer la separación desde abajo (sin dejar que caiga bajo el eje).
+    exceso = label_y[-1] - (y_hi - MIN_SEP * 0.35)
+    if exceso > 0:
+        label_y = [y - exceso for y in label_y]
+        label_y[0] = max(label_y[0], y_lo + MIN_SEP * 0.35)
+        for i in range(1, len(label_y)):
+            if label_y[i] - label_y[i - 1] < MIN_SEP:
+                label_y[i] = label_y[i - 1] + MIN_SEP
+
+    shapes = []
+    annotations = []
+    last_date = dates[-1]
+    for (valor, nombre, color, dash), y_lbl in zip(niveles, label_y):
+        shapes.append(dict(type="line", x0=dates[0], x1=last_date,
+                           y0=valor, y1=valor, xref="x", yref="y",
+                           line=dict(color=color, width=2, dash=dash)))
+        annotations.append(dict(x=1, xref="paper", y=y_lbl, yref="y",
+                                xanchor="left", yanchor="middle",
+                                text=f"  <b>{nombre}</b><br>  ${valor:,.0f}",
+                                showarrow=False,
+                                font=dict(size=20, color=color,
+                                          family="Helvetica-Bold")))
+
     fig.update_layout(
-        paper_bgcolor="#141920", plot_bgcolor="#141920",
+        paper_bgcolor="#101216", plot_bgcolor="#101216",
         margin=dict(l=110, r=200, t=40, b=60),
-        font=dict(family="Helvetica", color="#E4E7EC", size=22),
+        font=dict(family="Helvetica", color="#C9CDD3", size=22),
         xaxis=dict(showgrid=False, showline=False,
-                   tickfont=dict(size=20, color="#7A8898"),
+                   tickfont=dict(size=20, color="#8D949E"),
                    tickformat="%b %Y", nticks=6),
-        yaxis=dict(showgrid=True, gridcolor="#1E2530",
-                   tickfont=dict(size=20, color="#7A8898"),
+        yaxis=dict(showgrid=True, gridcolor="rgba(255,255,255,0.06)",
+                   tickfont=dict(size=20, color="#8D949E"),
                    tickprefix="$",
-                   range=[max(0, min_p - pad), max_p + pad]),
+                   range=[y_lo, y_hi]),
         showlegend=False,
         shapes=shapes,
         annotations=annotations,
