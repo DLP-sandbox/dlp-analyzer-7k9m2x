@@ -4545,6 +4545,14 @@ def get_recommendation_badge(recommendation: str) -> str:
         "WATCH":           "badge-watch",
         "PASS":            "badge-pass",
     }.get(recommendation, "badge-watch")
+
+    # La CLASE se resuelve con el valor interno (arriba); el TEXTO se muestra
+    # con el alias de pantalla. Import local: styles.py no depende de nada.
+    try:
+        from config.settings import rec_display
+        recommendation = rec_display(recommendation)
+    except Exception:
+        pass
     return f'<span class="{css_class}">{recommendation}</span>'
 
 

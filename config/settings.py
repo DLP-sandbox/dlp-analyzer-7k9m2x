@@ -47,6 +47,29 @@ THRESHOLDS = {
     "EVITAR":           0,
 }
 
+# ── Etiqueta de PANTALLA de la recomendación ───────────────────────────────
+# El valor INTERNO no cambia: "EVITAR" lo siguen produciendo la IA y
+# _score_to_recommendation, y viaja así en los análisis ya guardados, en los
+# umbrales de arriba y en las clases CSS del chip. Lo que se renombra es solo
+# lo que LEE el usuario: "EVITAR" es un imperativo ("evita esta acción") dentro
+# de una escala que por lo demás describe, no ordena. "POCO ATRACTIVO" cierra
+# el eje MUY ATRACTIVO → ATRACTIVO → EN OBSERVACIÓN → POCO ATRACTIVO y mide
+# los mismos 14 caracteres que "EN OBSERVACIÓN", así el chip no se descuadra.
+REC_DISPLAY = {
+    "EVITAR": "POCO ATRACTIVO",
+    "PASS":   "POCO ATRACTIVO",   # análisis antiguos, cuando la escala era inglesa
+}
+
+
+def rec_display(rec) -> str:
+    """Recomendación tal y como debe VERSE. Cualquier otro valor pasa intacto.
+    Nunca lanza: si algo viniera raro, se muestra tal cual estaba."""
+    try:
+        s = str(rec or "").strip()
+        return REC_DISPLAY.get(s.upper(), s)
+    except Exception:
+        return str(rec or "")
+
 # Screener — filtros básicos de universo (legacy fallback cuando no se pasan filtros custom)
 SCREENER_FILTERS = {
     "min_price":       10.0,

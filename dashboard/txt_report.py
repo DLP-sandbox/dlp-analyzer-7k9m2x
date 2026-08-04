@@ -177,6 +177,15 @@ def _sector_es(sector) -> str:
         return _s(sector)
 
 
+def _rec_es(rec) -> str:
+    """Etiqueta de la recomendación tal y como la ve el usuario en la app."""
+    try:
+        from config.settings import rec_display
+        return rec_display(rec) or _s(rec)
+    except Exception:
+        return _s(rec)
+
+
 def _negocio(info: dict) -> str:
     """Frase corta en español de a qué se dedica la empresa (la misma que usa
     la app). Devuelve '' si no hay dato — la línea se queda con su guion."""
@@ -250,7 +259,7 @@ def build_analysis_txt(analysis, live: Optional[dict] = None) -> str:
     score = _num(g("composite_score"))
     L += [
         _kv("Puntuación compuesta", f"{score:.1f} / 100" if score is not None else "—"),
-        _kv("Recomendación", g("recommendation")),
+        _kv("Valoración del modelo", _rec_es(g("recommendation"))),
         _kv("Nivel de convicción", CONV_ES.get(str(g("conviction_level") or "").upper(),
                                                _s(g("conviction_level")))),
         _kv("Horizonte temporal", g("time_horizon")),

@@ -1019,12 +1019,19 @@ def _page_1_synthesis(c, a):
 
     # Recommendation badge + conviction
     rec = a.recommendation or "EN OBSERVACIÓN"
-    fill_c, text_c = _rec_palette(rec)
+    fill_c, text_c = _rec_palette(rec)      # paleta: SIEMPRE con el valor interno
+    # `rec` se queda crudo (paleta y gauge lo usan); `rec_txt` es lo que se
+    # IMPRIME (ver config.settings.rec_display).
+    try:
+        from config.settings import rec_display
+        rec_txt = rec_display(rec)
+    except Exception:
+        rec_txt = rec
     badge_w, badge_h = 320, 42
     badge_x = PAGE_W - MARGIN_X - 60 - badge_w
     badge_top = hero_top + 184
     _box(c, badge_x, badge_top, badge_w, badge_h, r=8, fill=fill_c)
-    _text(c, rec.upper(), badge_x + badge_w/2, badge_top + 28,
+    _text(c, rec_txt.upper(), badge_x + badge_w/2, badge_top + 28,
           font=FONT_BOLD, size=16, color=text_c, anchor="center")
 
     # Conviction siempre en español
@@ -1054,7 +1061,7 @@ def _page_1_synthesis(c, a):
          fill=BG_CARD, stroke=BORDER, stroke_w=1)
     _text(c, "PUNTAJE DLP", p1_x + 28, mid_top + 38,
           font=FONT_DISPLAY, size=19, color=TEXT_LO)
-    _text(c, rec.upper(), p1_x + 28, mid_top + 64,
+    _text(c, rec_txt.upper(), p1_x + 28, mid_top + 64,
           font=FONT_DISPLAY, size=14, color=fill_c)
 
     try:

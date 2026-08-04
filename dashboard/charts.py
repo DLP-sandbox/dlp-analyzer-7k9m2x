@@ -435,6 +435,13 @@ def build_gauge(score: float, recommendation: str) -> go.Figure:
         "PASS":       "#F1495F",
     }
     rec_color = rec_colors.get(recommendation, "#E2B25C")
+    # El color se resuelve con el valor interno; bajo el arco se escribe la
+    # etiqueta de pantalla (ver config.settings.rec_display).
+    try:
+        from config.settings import rec_display
+        recommendation = rec_display(recommendation)
+    except Exception:
+        pass
     # El arco y el número usan el color del TERMÓMETRO del score (fuente única
     # _score_color); el veredicto conserva su propio color semántico.
     sc = _score_color(score)
