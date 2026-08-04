@@ -854,6 +854,73 @@ def _build_pdf_bytes_cached(ticker: str, timestamp: str, _analysis) -> bytes:
     return build_analysis_pdf(_analysis)
 
 
+def _gather_live_for_txt(ticker: str) -> dict:
+    """Datos de mercado frescos para el informe .txt.
+
+    Usa EXCLUSIVAMENTE los helpers ya cacheados que las secciones de la app
+    consultan igualmente al pintarse, así que no añade descargas nuevas ni
+    ralentiza la vista. Cada bloque va aislado: si una fuente falla, ese dato
+    se omite y el informe se genera igual con el resto."""
+    live: dict = {}
+
+    def _try(key, fn):
+        try:
+            val = fn()
+            if val:
+                live[key] = val
+        except Exception:
+            pass
+
+    _try("info", lambda: _cached_company_info(ticker))
+    _try("risk_levels", lambda: _cached_risk_levels(ticker))
+    _try("holders", lambda: _cached_holders(ticker, live.get("info")))
+    _try("events", lambda: _cached_corporate_events(ticker))
+    _try("news", lambda: _cached_news(ticker, 8))
+
+    try:
+        from data.market_data import get_earnings_data
+        live["earnings"] = get_earnings_data(ticker) or {}
+    except Exception:
+        pass
+    try:
+        from data.market_data import get_macro_data
+        live["macro"] = get_macro_data() or {}
+    except Exception:
+        pass
+
+    # Indicadores + últimas sesiones desde el MISMO df que usa la vista técnica.
+    try:
+        df, ind = _hist_and_indicators(ticker, "2y")
+        if ind:
+            live["indicators"] = ind
+        if df is not None and not df.empty:
+            cols = {c.lower(): c for c in df.columns}
+            filas = []
+            for idx, row in df.tail(15).iterrows():
+                filas.append({
+                    "date":   str(getattr(idx, "date", lambda: idx)()),
+                    "open":   row.get(cols.get("open")),
+                    "high":   row.get(cols.get("high")),
+                    "low":    row.get(cols.get("low")),
+                    "close":  row.get(cols.get("close")),
+                    "volume": row.get(cols.get("volume")),
+                })
+            live["ohlcv"] = filas
+    except Exception:
+        pass
+
+    return live
+
+
+# TTL de 10 min: el informe siempre baja con precios y métricas recientes, y a
+# la vez no se reconstruye en cada rerun. Cache key = (ticker, timestamp).
+@st.cache_data(ttl=600, show_spinner=False, max_entries=24)
+def _build_txt_bytes_cached(ticker: str, timestamp: str, _analysis) -> bytes:
+    """Informe en texto plano del análisis. Cero llamadas a Anthropic."""
+    from dashboard.txt_report import build_analysis_txt
+    return build_analysis_txt(_analysis, _gather_live_for_txt(ticker)).encode("utf-8")
+
+
 def _ticker_exists_on_yahoo(ticker: str) -> bool:
     """Verifica que el ticker exista en Yahoo Finance.
 
@@ -4274,6 +4341,13 @@ def main():
         _pdf_bytes = None
         st.warning(f"No se pudo preparar el PDF descargable: {_pdf_err}")
 
+    # El .txt se construye aparte: si fallara, el PDF sigue disponible (y al
+    # revés). Ninguno de los dos puede tumbar la vista del análisis.
+    try:
+        _txt_bytes = _build_txt_bytes_cached(analysis.ticker, analysis.timestamp, analysis)
+    except Exception:
+        _txt_bytes = None
+
     _col_home, _col_mid, _col_pdf = st.columns([2, 3, 2])
     with _col_home:
         if st.button("⌂  Volver al Inicio", use_container_width=True,
@@ -4286,15 +4360,32 @@ def main():
             st.session_state.scanner_config_open = False
             st.rerun()
     with _col_pdf:
-        if _pdf_bytes:
-            st.download_button(
-                label="Descargar análisis en PDF",
-                data=_pdf_bytes,
-                file_name=f"DLP_{analysis.ticker}_{analysis.timestamp[:10]}.pdf",
-                mime="application/pdf",
-                key=f"pdf_dl_{analysis.ticker}",
-                use_container_width=True,
-            )
+        # La franja de descarga se reparte en dos mitades iguales:
+        # PDF (informe visual) | TXT (mismo contenido en texto plano).
+        _c_pdf, _c_txt = st.columns(2, gap="small")
+        with _c_pdf:
+            if _pdf_bytes:
+                st.download_button(
+                    label="↓  PDF",
+                    data=_pdf_bytes,
+                    file_name=f"DLP_{analysis.ticker}_{analysis.timestamp[:10]}.pdf",
+                    mime="application/pdf",
+                    key=f"pdf_dl_{analysis.ticker}",
+                    use_container_width=True,
+                    help="Informe visual del análisis, listo para leer o compartir.",
+                )
+        with _c_txt:
+            if _txt_bytes:
+                st.download_button(
+                    label="↓  TXT",
+                    data=_txt_bytes,
+                    file_name=f"DLP_{analysis.ticker}_{analysis.timestamp[:10]}.txt",
+                    mime="text/plain",
+                    key=f"txt_dl_{analysis.ticker}",
+                    use_container_width=True,
+                    help="Todo el análisis y los datos verificados en texto plano, "
+                         "pensado para pegárselo a una IA y que lo lea entero.",
+                )
 
     # Botón "← Volver al Scan" — visible cuando hay resultados de scan activos
     if st.session_state.scan_results:
