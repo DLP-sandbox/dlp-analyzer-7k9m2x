@@ -176,6 +176,20 @@ No inventes traducciones raras de estos (moat NO es "foso").
 se especifica (en inglés: "wide", "bullish", "low"…) — el dashboard depende de
 esos literales. El español aplica SOLO al texto narrativo.
 
+🚫 DATOS QUE FALTAN — NUNCA PENALIZAN (REGLA CRÍTICA DE PUNTUACIÓN):
+Un dato marcado "N/A", "—", vacío o ausente significa que NO EXISTE o NO APLICA
+para esta empresa (fuente sin cobertura, métrica sin sentido en su modelo de
+negocio, empresa joven sin histórico). NO es una señal negativa y NO es un cero.
+- SÁCALO DE LA ECUACIÓN: puntúa esa sub-dimensión SOLO con los datos que sí
+  tienes, como si el dato ausente no estuviera en la lista.
+- Si una sub-dimensión se queda SIN NINGÚN dato, dale el valor NEUTRO de su
+  rango (la mitad: 12/25, 16/33…) — nunca el mínimo ni el máximo.
+- PROHIBIDO usar la ausencia como `con`/riesgo ("no hay datos de X", "falta
+  información sobre Y") ni bajar la nota por ella. Si la ausencia es relevante,
+  menciónala en el `analysis` como contexto, sin castigarla.
+- Un dato NEGATIVO real (ROIC -4%, FCF negativo) sí puntúa mal: eso es un dato,
+  no una ausencia. La regla es solo para lo que NO se pudo medir.
+
 🎯 SCORING ANTI-CLUSTERING (REGLA CRÍTICA):
 NO uses scores típicos de banda (72, 65, 80, 50). Da scores PRECISOS con granularidad
 de 1-3 puntos basados en evidencia cuantitativa real. Cada análisis es único: dos empresas
@@ -184,6 +198,40 @@ qué tan cerca esté la evidencia de uno u otro extremo. Evita repetir 72, 75, 8
 análisis distintos. Calibra a la baja: 60 no es "promedio", es "mediocre"; 75 no es
 "bueno", es "muy bueno claramente por encima del sector"; 85 es excepcional. Usa toda
 la escala 30-95 con precisión decimal-style (aunque enteros), no te encajones en bandas."""
+
+
+def dato_numerico(value):
+    """Número USABLE, o None si el dato no existe.
+
+    Regla de oro del blindaje: un dato que falta NO es un cero. `None`, `""`,
+    "N/A", "—", NaN, infinitos y cualquier texto no numérico devuelven None
+    para que quien puntúa pueda SACARLO de la ecuación en vez de meterlo como
+    un 0 (que hundiría la nota) o como un máximo (que la inflaría)."""
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, str):
+            s = value.strip().replace("$", "").replace(",", "").replace("%", "")
+            if not s or s.upper() in ("N/A", "NA", "—", "-", "N/D", "NONE", "NAN"):
+                return None
+            v = float(s)
+        else:
+            v = float(value)
+        if v != v or v in (float("inf"), float("-inf")):   # NaN / ±inf
+            return None
+        return v
+    except Exception:
+        return None
+
+
+def score_valido(value, neutro: float = 50.0) -> float:
+    """Nota del LLM como número, o el valor NEUTRO si no vino o no es numérica.
+
+    Nunca lanza: antes, un `"score": null` en el JSON hacía `float(None)` →
+    TypeError → el agente ENTERO caía a su `except` y devolvía un reporte de
+    error. Una nota que falta ahora sale neutra, no rota."""
+    v = dato_numerico(value)
+    return neutro if v is None else v
 
 
 @dataclass

@@ -1213,6 +1213,28 @@ def run_market_scan(filters: Optional[dict] = None):
 
 # ── Helpers reutilizables para tabs de agentes ───────────────────────────
 
+def _render_disclaimer():
+    """Aviso legal al pie del Overview y del Riesgo.
+
+    Deliberadamente discreto: mismo fondo oscuro que las demás tarjetas, gris
+    apagado y letra pequeña. Tiene que estar y poder leerse, no robar atención
+    al análisis. NUNCA lanza: es lo último que se pinta en la sección y no
+    puede tumbarla."""
+    try:
+        st.markdown(
+            # OJO: <div>, no <p>. La regla `.stMarkdown p` de styles.py fija
+            # color con !important y tamaño 0.88rem, y se comería tanto el gris
+            # apagado como la letra pequeña de este aviso.
+            '<div class="disclaimer-card"><div class="disclaimer-text">'
+            'DLP Analyzer se conecta y analiza en vivo los datos de mercado de cada acción. '
+            'Esto no es una recomendación de inversión ni asesoría financiera personalizada.'
+            '</div></div>',
+            unsafe_allow_html=True,
+        )
+    except Exception:
+        pass
+
+
 def _conviction_es(v) -> str:
     """Traduce el nivel de convicción a español. 'Convicción' es femenino →
     ALTA / MEDIA / BAJA (no ALTO). Si ya viene en español o es desconocido,
@@ -2344,8 +2366,12 @@ def render_fundamentals(analysis: StockAnalysis):
         ("Solidez Financiera", sub.get("financial_health")),
     ]
     for label, val in pillars:
-        if val is not None:
-            scaled = float(val) * 4  # escalar /25 → /100
+        # Blindaje: solo entra el pilar con una sub-nota REAL. Si falta (o viene
+        # como texto/null), su barra se OMITE — nunca se dibuja en 0, que se
+        # leería como la peor nota cuando el dato simplemente no existe.
+        num = _safe_num(val)
+        if num is not None:
+            scaled = num * 4  # escalar /25 → /100
             # Color por PUNTAJE (escala graduada rojo→verde), no fijo por categoría.
             sub_items.append((label, scaled, score_color(scaled)))
 
@@ -2432,8 +2458,10 @@ def render_future(analysis: StockAnalysis):
         ("Capital Allocation",     sub.get("management_capital_allocation")),
     ]
     for label, val in pillars:
-        if val is not None:
-            scaled = float(val) * 4
+        # Mismo blindaje que en Fundamentales: pilar sin dato = barra omitida.
+        num = _safe_num(val)
+        if num is not None:
+            scaled = num * 4
             # Color por PUNTAJE (escala graduada rojo→verde), no fijo por categoría.
             sub_items.append((label, scaled, score_color(scaled)))
 
@@ -4439,6 +4467,10 @@ def main():
 
     if sect == "Overview":
         render_overview(analysis)
+        # El aviso legal se pinta AQUÍ y no dentro de render_overview para que
+        # aparezca al final del todo pase lo que pase: si la función corta antes
+        # por falta de datos, el disclaimer sigue estando.
+        _render_disclaimer()
     elif sect == "Técnico":
         render_technical(analysis)
     elif sect == "Fundamentales":
@@ -4462,6 +4494,7 @@ def main():
         render_sentiment(analysis)
     elif sect == "Riesgo":
         render_risk(analysis)
+        _render_disclaimer()
 
 
 if __name__ == "__main__":

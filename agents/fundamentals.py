@@ -4,7 +4,7 @@ calidad, crecimiento, valoración, solidez financiera y potencial de DCF.
 """
 import anthropic
 
-from agents.base import BaseAgent, AgentReport
+from agents.base import BaseAgent, AgentReport, dato_numerico, score_valido
 from data.market_data import get_company_info, get_financials, compute_quality_ratios, get_earnings_data
 
 
@@ -83,15 +83,24 @@ class FundamentalsAgent(BaseAgent):
                 return self._safe_report(ticker, result["error"])
 
             sub_scores = result.get("sub_scores", {})
+
+            # Blindaje: una sub-nota ausente o no numérica cae al valor NEUTRO
+            # de su rango (12/25), nunca a 0 ni al máximo. Antes, un `null` aquí
+            # lanzaba TypeError y tumbaba el agente ENTERO al except → reporte
+            # de error con un 50 falso, por una sola sub-nota.
+            def _sn(clave, neutro=12.0):
+                v = dato_numerico(sub_scores.get(clave))
+                return (neutro if v is None else v) / 25 * 20
+
             snowflake = {
-                "value":   sub_scores.get("valuation", 12) / 25 * 20,
-                "quality": sub_scores.get("quality", 12) / 25 * 20,
-                "growth":  sub_scores.get("growth", 12) / 25 * 20,
+                "value":   _sn("valuation"),
+                "quality": _sn("quality"),
+                "growth":  _sn("growth"),
             }
 
             return AgentReport(
                 agent_name=self.name,
-                score=float(result.get("score", 50)),
+                score=score_valido(result.get("score")),
                 analysis=result.get("analysis", ""),
                 pros=result.get("pros", []),
                 cons=result.get("cons", []),

@@ -32,6 +32,30 @@ WHITE    = "#F2F3F5"                     # --text-hi
 BAR_RADIUS = "30%"
 
 
+def _num(value):
+    """Número USABLE, o None si el dato no existe.
+
+    Blindaje de las gráficas: un dato ausente ("—", "N/A", null, NaN) NO es un
+    cero. Devolviendo None, quien dibuja puede OMITIR esa barra o dimensión en
+    vez de pintarla en el suelo (que se leería como una nota pésima) o de
+    reventar la sección entera con un TypeError."""
+    try:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, str):
+            s = value.strip().replace("$", "").replace(",", "").replace("%", "")
+            if not s or s.upper() in ("N/A", "NA", "—", "-", "N/D", "NONE", "NAN"):
+                return None
+            v = float(s)
+        else:
+            v = float(value)
+        if v != v or v in (float("inf"), float("-inf")):
+            return None
+        return v
+    except Exception:
+        return None
+
+
 def _score_color(s) -> str:
     """Color de un puntaje 0-100 en la MISMA escala del termómetro
     (rojo→ámbar→verde, de peor a mejor). Fuente única de verdad para todas las
@@ -531,7 +555,10 @@ def build_snowflake(snowflake: dict) -> go.Figure:
     }
 
     labels = [categories.get(k, k) for k in ["value", "quality", "growth", "momentum", "future"]]
-    values = [snowflake.get(k, 10) for k in ["value", "quality", "growth", "momentum", "future"]]
+    # Una dimensión sin dato usable se dibuja en el NEUTRO del rango (10/20):
+    # ni hunde el perfil a 0 ni lo infla a 20. Y un null ya no revienta el radar.
+    values = [(_num(snowflake.get(k)) if _num(snowflake.get(k)) is not None else 10)
+              for k in ["value", "quality", "growth", "momentum", "future"]]
     values_closed = values + [values[0]]
     labels_closed = labels + [labels[0]]
 
@@ -720,8 +747,15 @@ def build_score_breakdown(score_breakdown: dict) -> go.Figure:
     order = ["fundamentals", "technical", "future", "institutional",
              "catalysts", "macro", "sentiment", "risk"]
 
-    names  = [agent_display[k] for k in order]
-    scores = [float(score_breakdown.get(k, 50)) for k in order]
+    # Blindaje: solo entran los bloques con una nota REAL. El que no tenga
+    # datos se omite (no se dibuja una barra de 50 que nadie calculó, ni una de
+    # 0 que se leería como suspenso). Un valor no numérico ya no revienta aquí.
+    medidos = [(agent_display[k], _num(score_breakdown.get(k)))
+               for k in order if _num(score_breakdown.get(k)) is not None]
+    if not medidos:
+        return go.Figure()
+    names  = [m[0] for m in medidos]
+    scores = [m[1] for m in medidos]
 
     bar_colors = [_score_color(s) for s in scores]
     n = len(names)
@@ -1145,8 +1179,15 @@ def build_metric_bars(items: list, height: int = 220, title: str = "",
     if not items:
         return go.Figure()
 
+    # Blindaje: un item cuyo valor no existe se DESCARTA (antes se dibujaba
+    # como una barra de 0, que en una gráfica de calificaciones se lee como la
+    # peor nota posible cuando en realidad el dato solo faltaba).
+    items = [i for i in items if _num(i[1]) is not None]
+    if not items:
+        return go.Figure()
+
     labels = [i[0] for i in items]
-    values = [i[1] if isinstance(i[1], (int, float)) else 0 for i in items]
+    values = [_num(i[1]) for i in items]
     colors = [_score_color(v) for v in values] if color_by_score else [i[2] for i in items]
 
     text_vals = [

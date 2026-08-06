@@ -12,7 +12,8 @@ from typing import Optional
 import anthropic
 
 from config.settings import ORCHESTRATOR_MODEL, MAX_TOKENS_ORCHESTRATOR, WEIGHTS, THRESHOLDS
-from agents.base import AgentReport, BaseAgent, today_context, DLP_STYLE_REMINDER
+from agents.base import (AgentReport, BaseAgent, today_context, DLP_STYLE_REMINDER,
+                         dato_numerico)
 from agents.fundamentals import FundamentalsAgent
 from agents.technical import TechnicalAgent
 from agents.future_viability import FutureViabilityAgent
@@ -221,17 +222,29 @@ class Orchestrator:
     def _synthesize(self, ticker: str, reports: dict[str, AgentReport]) -> StockAnalysis:
         """El Orquestador lee todos los reportes y genera la decisión final."""
 
-        # Calcular composite score ponderado
+        # ── Composite score ponderado — BLINDADO contra datos ausentes ────
+        # Un bloque SIN datos (no llegó, o falló su fuente y trae `error`) se
+        # SACA DE LA ECUACIÓN y su peso se reparte entre los que sí tienen
+        # datos. Antes se le inyectaba un 50 "neutro", y ese 50 arrastraba el
+        # score de una empresa buena: con todos los bloques en 85, perder solo
+        # Smart Money la dejaba en 80.8 — 4.2 puntos por un dato que faltaba,
+        # no por la empresa. Tampoco entra en el desglose (así la gráfica de
+        # barras omite la barra en vez de dibujar un 50 que nadie calculó).
         weighted_score = 0.0
+        peso_util = 0.0
         score_breakdown = {}
         for key, weight in WEIGHTS.items():
             report = reports.get(key)
-            if report:
-                score_breakdown[key] = report.score
-                weighted_score += report.score * weight
-            else:
-                score_breakdown[key] = 50
-                weighted_score += 50 * weight
+            score = dato_numerico(getattr(report, "score", None)) if report else None
+            sin_datos = (report is None) or bool(getattr(report, "error", None))
+            if score is not None and not sin_datos:
+                score_breakdown[key] = score
+                weighted_score += score * weight
+                peso_util += weight
+        if peso_util > 0:
+            weighted_score /= peso_util      # renormaliza sobre lo que SÍ se midió
+        else:
+            weighted_score = 50.0            # nada medible: neutro, sin inventar
 
         # Preparar resumen para el Orquestador (inyectando contexto temporal)
         summary = today_context() + self._build_synthesis_message(ticker, reports, weighted_score)
@@ -289,14 +302,31 @@ class Orchestrator:
         from data.market_data import get_company_info
         info = get_company_info(ticker)
 
-        composite = float(result.get("composite_score", weighted_score))
+        # Si el orquestador devuelve un composite no numérico (null, texto…),
+        # se usa el ponderado ya blindado en vez de reventar.
+        composite = dato_numerico(result.get("composite_score"))
+        if composite is None:
+            composite = weighted_score
 
         # ── CÁLCULOS DETERMINÍSTICOS DEL REBALANCEO ──────────────────────
 
-        # 1. long_term_quality_score = promedio de Fundamentales + Future (calidad estructural)
-        fund_score = float(reports["fundamentals"].score) if reports.get("fundamentals") else 50
-        fut_score  = float(reports["future"].score)       if reports.get("future") else 50
-        long_term_quality_score = (fund_score + fut_score) / 2
+        # 1. long_term_quality_score = promedio de los bloques de calidad QUE SÍ
+        #    tienen datos. Si uno falta o falló, se sale del promedio en vez de
+        #    meter un 50 que arrastre la calidad de una empresa buena.
+        def _score_util(rep):
+            """Score real del bloque, o None si no hay datos que puntuar."""
+            if rep is None or getattr(rep, "error", None):
+                return None
+            return dato_numerico(getattr(rep, "score", None))
+
+        fund_real = _score_util(reports.get("fundamentals"))
+        fut_real  = _score_util(reports.get("future"))
+        medibles  = [s for s in (fund_real, fut_real) if s is not None]
+        long_term_quality_score = sum(medibles) / len(medibles) if medibles else 50.0
+        # Para los vetos, un bloque sin datos se comporta como NEUTRO: ni
+        # dispara el veto de "fundamentales rotos" ni regala el bonus.
+        fund_score = fund_real if fund_real is not None else 50.0
+        fut_score  = fut_real  if fut_real  is not None else 50.0
 
         # 2. quality_verdict como función pura del score
         if long_term_quality_score >= 85:   quality_verdict = "best-in-class"
@@ -476,10 +506,22 @@ class Orchestrator:
         fut = reports.get("future")
 
         def sub(report, keys, max_sum):
+            """Dimensión del perfil (0-20) con las sub-notas QUE EXISTEN.
+
+            Blindaje: las sub-notas ausentes o no numéricas se sacan de la
+            ecuación y la dimensión se calcula sobre la porción medida (regla
+            de tres). Antes, una sub-nota que faltaba tomaba el valor MÁXIMO de
+            su rango — «Valor» sin datos salía 20/20 perfecto — y una que
+            llegaba en null reventaba el cálculo entero."""
             if not report:
                 return 10.0
-            total = sum(report.sub_scores.get(k, max_sum / len(keys)) for k in keys)
-            return min(total / max_sum * 20, 20)
+            subs = getattr(report, "sub_scores", None) or {}
+            medidas = [dato_numerico(subs.get(k)) for k in keys]
+            medidas = [v for v in medidas if v is not None]
+            if not medidas:
+                return 10.0                      # neutro: ni castiga ni premia
+            tope = max_sum * len(medidas) / len(keys)     # tope proporcional
+            return min(sum(medidas) / tope * 20, 20) if tope > 0 else 10.0
 
         return {
             "value":    sub(fund, ["valuation"], 25),

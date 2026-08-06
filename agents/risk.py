@@ -5,7 +5,7 @@ stop técnico, target y sizing sugerido. Actúa como multiplicador del score.
 import anthropic
 import numpy as np
 
-from agents.base import BaseAgent, AgentReport
+from agents.base import BaseAgent, AgentReport, score_valido
 from data.market_data import (get_price_history, compute_technical_indicators,
                               get_technical_indicators, get_company_info)
 
@@ -109,7 +109,7 @@ class RiskAgent(BaseAgent):
 
             return AgentReport(
                 agent_name=self.name,
-                score=float(result.get("score", 50)),
+                score=score_valido(result.get("score")),
                 analysis=result.get("analysis", ""),
                 pros=result.get("pros", []),
                 cons=result.get("cons", []),

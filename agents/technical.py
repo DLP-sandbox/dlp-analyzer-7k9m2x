@@ -6,7 +6,7 @@ Retorna también los datos del chart para visualización en el dashboard.
 import anthropic
 import pandas as pd
 
-from agents.base import BaseAgent, AgentReport
+from agents.base import BaseAgent, AgentReport, dato_numerico, score_valido
 from data.market_data import (
     get_price_history, get_weekly_history,
     compute_technical_indicators, get_technical_indicators, get_relative_strength
@@ -103,11 +103,17 @@ class TechnicalAgent(BaseAgent):
                 return self._safe_report(ticker, result.get("error", "Error desconocido"))
 
             sub_scores = result.get("sub_scores", {})
-            snowflake_momentum = (sub_scores.get("trend_quality", 16) + sub_scores.get("momentum", 16)) / 2 / 33 * 20
+            # Sub-notas ausentes → neutro de su rango (16/33), nunca 0; y un
+            # `null` ya no tumba el agente entero al except.
+            def _sn(clave, neutro=16.0):
+                v = dato_numerico(sub_scores.get(clave))
+                return neutro if v is None else v
+
+            snowflake_momentum = (_sn("trend_quality") + _sn("momentum")) / 2 / 33 * 20
 
             return AgentReport(
                 agent_name=self.name,
-                score=float(result.get("score", 50)),
+                score=score_valido(result.get("score")),
                 analysis=result.get("analysis", ""),
                 pros=result.get("pros", []),
                 cons=result.get("cons", []),

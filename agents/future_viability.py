@@ -5,7 +5,7 @@ y calidad del management. Usa noticias + descripción del negocio.
 """
 import anthropic
 
-from agents.base import BaseAgent, AgentReport
+from agents.base import BaseAgent, AgentReport, dato_numerico, score_valido
 from data.market_data import get_company_info, get_news, get_financials, compute_quality_ratios
 
 
@@ -81,14 +81,17 @@ class FutureViabilityAgent(BaseAgent):
                 return self._safe_report(ticker, result.get("error", "Error"))
 
             sub_scores = result.get("sub_scores", {})
-            future_snowflake = (
-                sub_scores.get("moat_quality", 12) +
-                sub_scores.get("growth_runway", 12)
-            ) / 50 * 20
+            # Sub-notas ausentes → valor NEUTRO de su rango (12/25), nunca 0.
+            # Y un `null` ya no puede tumbar el agente entero al except.
+            def _sn(clave, neutro=12.0):
+                v = dato_numerico(sub_scores.get(clave))
+                return neutro if v is None else v
+
+            future_snowflake = (_sn("moat_quality") + _sn("growth_runway")) / 50 * 20
 
             return AgentReport(
                 agent_name=self.name,
-                score=float(result.get("score", 50)),
+                score=score_valido(result.get("score")),
                 analysis=result.get("analysis", ""),
                 pros=result.get("pros", []),
                 cons=result.get("cons", []),

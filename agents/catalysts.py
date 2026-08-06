@@ -4,7 +4,7 @@ el precio: earnings, FDA, contratos, lanzamientos, revisiones de analistas.
 """
 import anthropic
 
-from agents.base import BaseAgent, AgentReport
+from agents.base import BaseAgent, AgentReport, score_valido
 from data.market_data import get_earnings_data, get_news, get_company_info
 
 
@@ -74,7 +74,7 @@ class CatalystsAgent(BaseAgent):
 
             return AgentReport(
                 agent_name=self.name,
-                score=float(result.get("score", 50)),
+                score=score_valido(result.get("score")),
                 analysis=result.get("analysis", ""),
                 pros=result.get("pros", []),
                 cons=result.get("cons", []),

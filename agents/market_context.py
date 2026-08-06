@@ -15,7 +15,7 @@ estilo DLP (términos explicados inline → texto más largo) y NO debe truncars
 """
 import anthropic
 
-from agents.base import BaseAgent, AgentReport
+from agents.base import BaseAgent, AgentReport, score_valido
 from data.market_data import (
     get_macro_data, get_news, get_earnings_data, get_company_info,
     get_corporate_events,
@@ -163,7 +163,7 @@ class MarketContextAgent(BaseAgent):
             # ── MACRO report (estructura idéntica a MacroAgent) ──
             macro_report = AgentReport(
                 agent_name="Macro & Sector",
-                score=float(m.get("score", 50)),
+                score=score_valido(m.get("score")),
                 analysis=m.get("analysis", ""),
                 pros=list(m.get("pros", []))[:3],
                 cons=list(m.get("cons", []))[:3],
@@ -180,7 +180,7 @@ class MarketContextAgent(BaseAgent):
             # ── SENTIMENT report (estructura idéntica a SentimentAgent) ──
             sentiment_report = AgentReport(
                 agent_name="Sentimiento",
-                score=float(s.get("score", 50)),
+                score=score_valido(s.get("score")),
                 analysis=s.get("analysis", ""),
                 pros=list(s.get("pros", []))[:3],
                 cons=list(s.get("cons", []))[:3],
@@ -197,7 +197,7 @@ class MarketContextAgent(BaseAgent):
             # ── CATALYSTS report (estructura idéntica a CatalystsAgent) ──
             catalysts_report = AgentReport(
                 agent_name="Catalizadores",
-                score=float(c.get("score", 50)),
+                score=score_valido(c.get("score")),
                 analysis=c.get("analysis", ""),
                 pros=list(c.get("pros", []))[:3],
                 cons=list(c.get("cons", []))[:3],
