@@ -28,9 +28,9 @@ from dashboard.pdf_rules import (
     _pills_macro, _pills_sentiment, _precios, _plan_posicion, _tesis_parrafos,
     _horizonte, _fecha_es, _money, _truncate_by_sentence,
 )
-from dashboard.pdf_charts import (
-    LOGO_PATH, _chart_png, _chart_png_fiel, _styled_logo_png, _qr_image,
-    _build_simple_price_chart, _build_price_journey_chart,
+from dashboard.pdf_charts import LOGO_PATH, _styled_logo_png, _logo_directo
+from dashboard.pdf_vector import (
+    dibujar_medidor, dibujar_radar, dibujar_precio, dibujar_qr,
 )
 
 TOTAL = len(SECCIONES)
@@ -194,18 +194,6 @@ def _text_card(c, x, top, w, h, title, text, *, size=13.5, max_lines=None) -> fl
                  line_height=1.38, max_lines=max_lines)
 
 
-def _draw_fig(c, fig, x, top, w, h, *, fiel=False, px_w=900, px_h=600, scale=2):
-    """Rasteriza y encaja una figura en un área (aspecto preservado, centrado)."""
-    if fig is None:
-        return False
-    img = _chart_png_fiel(fig, px_w, px_h, scale) if fiel else _chart_png(fig, px_w, px_h)
-    if img is None:
-        return False
-    c.drawImage(img, x, _y(top + h), width=w, height=h, preserveAspectRatio=True,
-                anchor="c", mask="auto")
-    return True
-
-
 # ═════════════════════════════════════════════════════════════════════════
 # P1 · VEREDICTO
 # ═════════════════════════════════════════════════════════════════════════
@@ -257,23 +245,12 @@ def _pagina_1_veredicto(c, a):
     dw = w - gw - sw_ - 2 * gap
     cy = _card(c, x, top2, gw, h2, title="PUNTAJE DLP",
                subtitle=f"Calificación global · {_rec_txt(a)}")
-    try:
-        from dashboard.charts import build_gauge
-        fig = build_gauge(sc if sc is not None else 50, getattr(a, "recommendation", "") or "")
-        _draw_fig(c, fig, x + 16, cy + 4, gw - 32, top2 + h2 - cy - 18, fiel=True,
-                  px_w=520, px_h=440, scale=4)
-    except Exception:
-        pass
+    dibujar_medidor(c, x + 16, cy + 4, gw - 32, top2 + h2 - cy - 18, sc, _rec_txt(a))
     x2 = x + gw + gap
     cy = _card(c, x2, top2, sw_, h2, title="PERFIL DE CALIDAD",
                subtitle="Cinco dimensiones · 0–20 puntos cada una")
-    try:
-        from dashboard.charts import build_snowflake
-        fig = build_snowflake(getattr(a, "snowflake", None) or {})
-        _draw_fig(c, fig, x2 + 16, cy + 4, sw_ - 32, top2 + h2 - cy - 18, fiel=True,
-                  px_w=520, px_h=460, scale=4)
-    except Exception:
-        pass
+    dibujar_radar(c, x2 + 16, cy + 4, sw_ - 32, top2 + h2 - cy - 18,
+                  getattr(a, "snowflake", None) or {})
     x3 = x2 + sw_ + gap
     cy = _card(c, x3, top2, dw, h2, title="DESGLOSE POR ANÁLISIS",
                subtitle="Los ocho bloques del análisis · 0–100 cada uno")
@@ -404,8 +381,7 @@ def _pagina_3_tecnico(c, a):
     ch = 418
     cy = _card(c, x, body_top, left_w, ch, title="TENDENCIA DEL PRECIO",
                subtitle="Últimos dos años · cierre diario")
-    ok = _draw_fig(c, _build_simple_price_chart(a), x + 16, cy + 2, left_w - 32,
-                   body_top + ch - cy - 16, px_w=1700, px_h=int(1700 * (ch - 70) / (left_w - 32)))
+    ok = dibujar_precio(c, x + 16, cy + 2, left_w - 32, body_top + ch - cy - 16, a)
     if not ok:
         _text(c, "Sin histórico de precios suficiente esta vez.", x + 24, cy + 40,
               font=FONT_REG, size=14, color=TEXT_DIM)
@@ -566,8 +542,11 @@ def _pagina_6_riesgo(c, a):
     ch = 412
     cy = _card(c, x, body_top, left_w, ch, title="RECORRIDO DEL PRECIO",
                subtitle="Dónde está hoy, hasta dónde podría caer y hasta dónde podría llegar")
-    ok = _draw_fig(c, _build_price_journey_chart(a), x + 16, cy + 2, left_w - 32,
-                   body_top + ch - cy - 16, px_w=1700, px_h=int(1700 * (ch - 70) / (left_w - 32)))
+    p_niv = _precios(a)
+    ok = dibujar_precio(c, x + 16, cy + 2, left_w - 32, body_top + ch - cy - 16, a,
+                        niveles=[(p_niv["stop"], "Mínimo", RED),
+                                 (p_niv["actual"], "Actual", ORANGE),
+                                 (p_niv["target"], "Potencial", GREEN)])
     if not ok:
         _text(c, "Sin histórico de precios suficiente esta vez.", x + 24, cy + 40,
               font=FONT_REG, size=14, color=TEXT_DIM)
@@ -692,7 +671,7 @@ def _cta(c, x, top, w, h):
     if LOGO_PATH is not None:
         img = _styled_logo_png(LOGO_PATH, max_dim_px=900, corner_radius_pct=0.12,
                                glow_color=(255, 200, 110), glow_blur=36,
-                               glow_intensity=0.6, pad_px=70)
+                               glow_intensity=0.6, pad_px=70) or _logo_directo(LOGO_PATH)
         if img is not None:
             c.drawImage(img, lx, _y(top + h - 22), width=lw, height=h - 44,
                         preserveAspectRatio=True, anchor="c", mask="auto")
@@ -700,10 +679,8 @@ def _cta(c, x, top, w, h):
     qs = 168
     qx = x + w - 36 - qs
     qy = top + 26
-    _box(c, qx, qy, qs, qs, r=14, fill=CREAM)
-    qr = _qr_image(CLUB_DLP_URL, size_px=qs * 3)
-    if qr is not None:
-        c.drawImage(qr, qx + 8, _y(qy + qs - 8), width=qs - 16, height=qs - 16, mask="auto")
+    if not dibujar_qr(c, CLUB_DLP_URL, qx, qy, qs, radio=14):
+        _box(c, qx, qy, qs, qs, r=14, fill=CREAM)
     c.linkURL(CLUB_DLP_URL, (qx, _y(qy + qs), qx + qs, _y(qy)), relative=0, thickness=0)
     _text(c, "escanea para entrar", qx + qs / 2, top + h - 16, font=FONT_REG, size=10.5,
           color=TEXT_DIM, anchor="center")

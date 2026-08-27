@@ -11,10 +11,16 @@ clicable e índice del lector:
   6. Riesgo         — recorrido del precio, niveles, plan de la posición
   7. Conclusión     — a favor / en contra, entrada y salida, Club DLP
 
-Garantía: CERO llamadas a Anthropic. Ni este módulo ni pdf_theme / pdf_rules /
-pdf_charts / pdf_pages importan anthropic, instancian Orchestrator ni tocan
-client.messages. Solo leen el StockAnalysis ya construido y dibujan. Verificable:
-    grep -nE "anthropic|client\\.messages|Orchestrator" dashboard/pdf_*.py
+Garantías del módulo:
+  · CERO llamadas a Anthropic. Ni este módulo ni pdf_theme / pdf_rules /
+    pdf_charts / pdf_vector / pdf_pages importan anthropic, instancian
+    Orchestrator ni tocan client.messages. Verificable:
+        grep -nE "anthropic|client\\.messages|Orchestrator" dashboard/pdf_*.py
+  · CERO binarios externos. Las cuatro gráficas se dibujan en vector con
+    ReportLab (dashboard/pdf_vector.py), no con Plotly + kaleido: aquel
+    rasterizador arranca un Chromium que en Streamlit Cloud no tiene sus
+    librerías del sistema, fallaba, y el PDF salía con el texto completo y sin
+    una sola gráfica. Ahora el informe se ve idéntico en local y en la nube.
 """
 import io
 
@@ -26,8 +32,10 @@ from dashboard.pdf_pages import PAGINAS
 
 # Re-exportados por compatibilidad con scripts y pruebas anteriores.
 from dashboard.pdf_charts import (  # noqa: F401
-    _chart_png, _chart_png_fiel, _styled_logo_png, _qr_image, _autodetect_logo,
-    _build_simple_price_chart, _build_price_journey_chart, LOGO_PATH,
+    _styled_logo_png, _logo_directo, _autodetect_logo, LOGO_PATH,
+)
+from dashboard.pdf_vector import (  # noqa: F401
+    dibujar_medidor, dibujar_radar, dibujar_precio, dibujar_qr,
 )
 
 

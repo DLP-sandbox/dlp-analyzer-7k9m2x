@@ -848,7 +848,7 @@ def _build_pdf_bytes_cached(ticker: str, timestamp: str, _analysis) -> bytes:
     """Genera y cachea los bytes del PDF para un análisis.
     Cache key = (ticker, timestamp). El _analysis (prefix underscore) no se
     hashea — Streamlit lo trata como side input. Cero llamadas a Anthropic.
-    Primera generación: ~3-5s (kaleido renderiza 2 gráficos Plotly).
+    Primera generación: <1s (las gráficas se dibujan en vector, sin Chrome).
     Reruns posteriores: instantáneo."""
     from dashboard.pdf_report import build_analysis_pdf
     return build_analysis_pdf(_analysis)
