@@ -331,29 +331,14 @@ def _negocio(sector, industry=None) -> str:
 # Secciones del informe
 # ═════════════════════════════════════════════════════════════════════════
 SECCIONES = [
-    dict(n=1, key="veredicto",     code="",   nav="VEREDICTO",
-         titulo="VEREDICTO", subtitulo="La foto completa de la acción en una página"),
-    dict(n=2, key="fundamentals",  code="FN", nav="FUNDAMENTALES",
-         titulo="FUNDAMENTALES", subtitulo="Qué tan estable y rentable es la empresa",
-         teoria="Los fundamentales miden la salud del negocio: cuánto crece, cuánto gana "
-                "de verdad y cuánto debe. Es la base de todo."),
-    dict(n=3, key="technical",     code="TC", nav="TÉCNICO",
-         titulo="TÉCNICO", subtitulo="Hacia dónde va el precio y con cuánta fuerza",
-         teoria="El análisis técnico lee el precio: su tendencia, su impulso y los niveles "
-                "que importan. No dice si la empresa es buena; dice si es buen momento."),
-    dict(n=4, key="future",        code="FU", nav="FUTURO Y SMART MONEY",
-         titulo="FUTURO Y SMART MONEY",
-         subtitulo="La ventaja competitiva que la protege y qué hace el dinero grande"),
-    dict(n=5, key="context",       code="CT", nav="CONTEXTO",
-         titulo="CONTEXTO DEL MERCADO",
-         subtitulo="Los eventos que vienen, el entorno económico y el ánimo del mercado"),
-    dict(n=6, key="risk",          code="RS", nav="RIESGO",
-         titulo="RIESGO Y RECORRIDO DEL PRECIO",
-         subtitulo="Cuánto puedes perder, cuánto puedes ganar y cuánto invertir",
-         teoria="Invertir bien no es acertar siempre: es que, cuando aciertas, ganes más de "
-                "lo que pierdes cuando fallas. Aquí medimos esa relación."),
-    dict(n=7, key="conclusion",    code="",   nav="CONCLUSIÓN",
-         titulo="CONCLUSIÓN", subtitulo="Lo que pesa a favor, lo que pesa en contra y el plan"),
+    dict(n=1, key="veredicto", code="",   nav="VEREDICTO",
+         titulo="VEREDICTO", subtitulo="Lo esencial de la acción, en una página"),
+    dict(n=2, key="negocio",   code="FN", nav="EL NEGOCIO",
+         titulo="¿ES UN BUEN NEGOCIO?",
+         subtitulo="Cuánto crece, cuánto gana de verdad y cuánto debe"),
+    dict(n=3, key="momento",   code="RS", nav="EL MOMENTO",
+         titulo="¿ES BUEN MOMENTO?",
+         subtitulo="Hacia dónde va el precio y cuánto arriesgas si entras hoy"),
 ]
 
 # Orden y nombres OFICIALES de los 8 bloques (los mismos de la app)
@@ -630,11 +615,13 @@ _LABEL = {
 
 
 def _evaluar_metrica(clave, v, *, sin_ganancias=False) -> dict:
+    """Semáforo + frase de una métrica. La frase NO lleva cifras: el número ya
+    está arriba, y lo que se lee debe entenderse a la primera."""
     spec = dict(label=_LABEL[clave], que_mide=_QUE_MIDE[clave], unidad=None)
     if clave == "pe" and sin_ganancias:
         spec.update(valor_fmt="—", estado=MAL("SIN GANANCIAS"), pct_meter=None,
-                    frase="No tiene ganancias en el último año, así que este múltiplo no se "
-                          "puede calcular: hoy se paga por expectativas.")
+                    frase="No tuvo ganancias en el último año: hoy se paga por expectativas, "
+                          "no por resultados.")
         return spec
     if v is None:
         spec.update(valor_fmt="—", estado=SIN_DATO(), pct_meter=None, frase=_SIN_DATO_FRASE)
@@ -645,95 +632,72 @@ def _evaluar_metrica(clave, v, *, sin_ganancias=False) -> dict:
         spec["valor_fmt"] = f"{v:+.1f}%"
         spec["pct_meter"] = _meter_pct(v, -10, 30)
         if v >= 10:
-            spec["estado"], spec["frase"] = BIEN(), (
-                f"Vende un {_n(v)}% más que hace un año: crece a buen ritmo, por encima de lo habitual.")
+            spec["estado"], spec["frase"] = BIEN(), "Vende bastante más que hace un año: el negocio crece a buen ritmo."
         elif v >= 0:
-            spec["estado"], spec["frase"] = REGULAR(), (
-                f"Vende un {_n(v)}% más que hace un año: crece, pero despacio; conviene vigilar que no se estanque.")
+            spec["estado"], spec["frase"] = REGULAR(), "Vende algo más que hace un año: crece, pero despacio."
         else:
-            spec["estado"], spec["frase"] = MAL(), (
-                f"Vende un {_n(abs(v))}% menos que hace un año: el negocio se está encogiendo en vez de crecer.")
+            spec["estado"], spec["frase"] = MAL(), "Vende menos que hace un año: el negocio se está encogiendo en vez de crecer."
 
     elif clave == "roic":
         spec["valor_fmt"] = f"{v:.1f}%"
         spec["pct_meter"] = _meter_pct(v, 0, 25)
         if v > 15:
-            spec["estado"], spec["frase"] = BIEN(), (
-                f"Por cada $100 que invierte en el negocio genera ${_n(v)}: crea valor con claridad.")
+            spec["estado"], spec["frase"] = BIEN(), "Cada dólar que invierte en el negocio le rinde mucho: crea valor con claridad."
         elif v >= 8:
-            spec["estado"], spec["frase"] = REGULAR(), (
-                f"Por cada $100 que invierte en el negocio genera ${_n(v)}: rentabilidad aceptable, sin ser destacada.")
+            spec["estado"], spec["frase"] = REGULAR(), "El dinero que invierte le rinde de forma aceptable, sin destacar."
         elif v >= 0:
-            spec["estado"], spec["frase"] = MAL(), (
-                f"Por cada $100 que invierte en el negocio genera solo ${_n(v)}: el capital rinde poco.")
+            spec["estado"], spec["frase"] = MAL(), "El dinero que invierte en el negocio le rinde poco."
         else:
-            spec["estado"], spec["frase"] = MAL(), (
-                f"Por cada $100 invertidos pierde ${_n(abs(v))}: hoy el capital destruye valor en vez de crearlo.")
+            spec["estado"], spec["frase"] = MAL(), "Pierde dinero con cada dólar que invierte: hoy el capital destruye valor."
 
     elif clave == "margin":
         spec["valor_fmt"] = f"{v:.1f}%"
         spec["pct_meter"] = _meter_pct(v, 0, 32)
         if v > 20:
-            spec["estado"], spec["frase"] = BIEN(), (
-                f"De cada $100 que vende le quedan ${_n(v)} tras pagar el funcionamiento: negocio eficiente.")
+            spec["estado"], spec["frase"] = BIEN(), "De cada venta le queda una buena parte tras pagar el funcionamiento: negocio eficiente."
         elif v >= 10:
-            spec["estado"], spec["frase"] = REGULAR(), (
-                f"De cada $100 que vende le quedan ${_n(v)}: margen razonable, con poco colchón.")
+            spec["estado"], spec["frase"] = REGULAR(), "De cada venta le queda un margen razonable, con poco colchón."
         elif v >= 0:
-            spec["estado"], spec["frase"] = MAL(), (
-                f"De cada $100 que vende apenas le quedan ${_n(v)}: cualquier tropiezo se come la ganancia.")
+            spec["estado"], spec["frase"] = MAL(), "De cada venta apenas le queda nada: cualquier tropiezo se come la ganancia."
         else:
-            spec["estado"], spec["frase"] = MAL(), (
-                f"Pierde ${_n(abs(v))} por cada $100 que vende: el negocio aún no se paga a sí mismo.")
+            spec["estado"], spec["frase"] = MAL(), "Pierde dinero con cada venta: el negocio aún no se paga a sí mismo."
 
     elif clave == "fcf":
         spec["valor_fmt"] = f"{v:.1f}%"
         spec["pct_meter"] = _meter_pct(v, 0, 8)
         if v > 5:
-            spec["estado"], spec["frase"] = BIEN(), (
-                f"Genera ${_n(v)} de caja libre por cada $100 de valor en bolsa: efectivo real y abundante.")
+            spec["estado"], spec["frase"] = BIEN(), "Le sobra efectivo de verdad cada año, y en abundancia para lo que vale."
         elif v >= 2:
-            spec["estado"], spec["frase"] = REGULAR(), (
-                f"Genera ${_n(v)} de caja libre por cada $100 en bolsa: el efectivo que produce es moderado para lo que vale.")
+            spec["estado"], spec["frase"] = REGULAR(), "Le sobra algo de efectivo cada año: moderado para lo que vale en bolsa."
         elif v >= 0:
-            spec["estado"], spec["frase"] = MAL(), (
-                f"Genera solo ${_n(v)} de caja libre por cada $100 en bolsa: poco efectivo para lo que cuesta.")
+            spec["estado"], spec["frase"] = MAL(), "Le sobra muy poco efectivo para lo que cuesta en bolsa."
         else:
-            spec["estado"], spec["frase"] = MAL(), (
-                f"Quema caja: gasta más efectivo del que genera ({_n(abs(v))}% de su valor en bolsa al año).")
+            spec["estado"], spec["frase"] = MAL(), "Quema caja: gasta más efectivo del que genera."
 
     elif clave == "de":
         spec["valor_fmt"] = f"{v:.2f}x"
         spec["pct_meter"] = _meter_pct(v, 0, 2.5, invert=True)
         if v < 0:
-            spec["estado"], spec["frase"] = MAL(), (
-                "Debe más de lo que tiene: el patrimonio es negativo y el balance está bajo presión.")
+            spec["estado"], spec["frase"] = MAL(), "Debe más de lo que tiene: el patrimonio es negativo y el balance está bajo presión."
             spec["pct_meter"] = 2.0
         elif v < 0.5:
-            spec["estado"], spec["frase"] = BIEN(), (
-                f"Por cada $1 de patrimonio debe ${v:.2f}: deuda baja, balance cómodo.")
+            spec["estado"], spec["frase"] = BIEN(), "Debe poco comparado con lo que es suyo: balance cómodo."
         elif v <= 1.5:
-            spec["estado"], spec["frase"] = REGULAR(), (
-                f"Por cada $1 de patrimonio debe ${v:.2f}: deuda manejable, pero ya pesa.")
+            spec["estado"], spec["frase"] = REGULAR(), "Debe una cantidad manejable, pero ya pesa."
         else:
-            spec["estado"], spec["frase"] = MAL(), (
-                f"Por cada $1 de patrimonio debe ${v:.2f}: deuda muy alta; depende de que el negocio no falle.")
+            spec["estado"], spec["frase"] = MAL(), "Debe mucho más de lo que es suyo: depende de que el negocio no falle."
 
     elif clave == "pe":
         spec["valor_fmt"] = f"{v:.1f}x"
         spec["pct_meter"] = _meter_pct(v, 8, 45, invert=True)
         if 5 <= v <= 18:
-            spec["estado"], spec["frase"] = BIEN("BARATO"), (
-                f"Pagas ${_n(v)} por cada $1 de ganancia anual: barato frente al mercado (~20), a veces por buenas razones.")
+            spec["estado"], spec["frase"] = BIEN("BARATO"), "Pagas poco por cada dólar que gana: barato frente al mercado, a veces por buenas razones."
         elif v <= 30:
-            spec["estado"], spec["frase"] = REGULAR("NORMAL"), (
-                f"Pagas ${_n(v)} por cada $1 de ganancia anual: en línea con lo habitual del mercado (~20).")
+            spec["estado"], spec["frase"] = REGULAR("NORMAL"), "Pagas por sus ganancias más o menos lo habitual en el mercado."
         elif v < 5:
-            spec["estado"], spec["frase"] = REGULAR("MUY BAJO"), (
-                f"Pagas ${_n(v)} por cada $1 de ganancia anual: tan bajo que el mercado desconfía de que esas ganancias duren.")
+            spec["estado"], spec["frase"] = REGULAR("MUY BAJO"), "Tan barato que el mercado desconfía de que esas ganancias duren."
         else:
-            spec["estado"], spec["frase"] = MAL("CARO"), (
-                f"Pagas ${_n(v)} por cada $1 de ganancia anual: caro; el precio ya descuenta mucho crecimiento futuro.")
+            spec["estado"], spec["frase"] = MAL("CARO"), "Pagas caro por cada dólar que gana: el precio ya descuenta mucho futuro."
     return spec
 
 
@@ -1063,3 +1027,144 @@ def _fecha_es(iso) -> str:
         return datetime.fromisoformat(str(iso)).strftime("%d/%m/%Y")
     except Exception:
         return str(iso or "")[:10]
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# Los 3 datos del momento (página 3)
+# ═════════════════════════════════════════════════════════════════════════
+def _momento_specs(a) -> list:
+    """Etapa del precio · Relación riesgo/beneficio · Pérdida máxima prevista,
+    con la misma estructura de tile que las métricas del negocio."""
+    r = _rep(a, "technical")
+    di = _rd(r).get("daily_indicators") or {}
+    st = _to_float(di.get("stage"))
+    if st is None:
+        st = _to_float(_km(r).get("stage"))
+    etapa = dict(label="ETAPA DEL PRECIO", unidad=None,
+                 que_mide="En qué fase está el precio: base, subida, techo o bajada.")
+    if st == 2:   etapa.update(valor_fmt="Subiendo", estado=BIEN(), pct_meter=85,
+                               frase="El precio viene subiendo de forma sostenida: la tendencia acompaña.")
+    elif st == 1: etapa.update(valor_fmt="En base", estado=REGULAR(), pct_meter=45,
+                               frase="El precio se mueve de lado, formando una base: aún no ha decidido dirección.")
+    elif st == 3: etapa.update(valor_fmt="En techo", estado=REGULAR(), pct_meter=55,
+                               frase="El precio ya subió mucho y el impulso se agota: zona de techo.")
+    elif st == 4: etapa.update(valor_fmt="Bajando", estado=MAL(), pct_meter=15,
+                               frase="El precio viene bajando de forma sostenida: la tendencia va en contra.")
+    else:         etapa.update(valor_fmt="—", estado=SIN_DATO(), pct_meter=None, frase=_SIN_DATO_FRASE)
+
+    plan = _plan_posicion(a)
+    rr_lab, rr_val, rr_est, _ = plan[0]
+    rr = dict(label="RIESGO / BENEFICIO", valor_fmt=rr_val, estado=rr_est, unidad=None,
+              que_mide="Cuánto puedes ganar frente a cuánto puedes perder si sale mal.")
+    rr_num = _to_float(rr_val.split(":")[0]) if rr_val not in (None, "—") else None
+    rr["pct_meter"] = _meter_pct(rr_num, 0.5, 3.0) if rr_num is not None else None
+    if rr_est.nivel == "bien":      rr["frase"] = "Por cada dólar que arriesgas puedes ganar bastante más: la relación juega a favor."
+    elif rr_est.nivel == "regular": rr["frase"] = "Ganas algo más de lo que arriesgas: el precio al que entres importa mucho."
+    elif rr_est.nivel == "mal":     rr["frase"] = "Ganas poco por cada dólar que arriesgas: hoy la relación juega en contra."
+    else:                           rr["frase"] = _SIN_DATO_FRASE
+
+    p = _precios(a)
+    perd = dict(label="PÉRDIDA MÁXIMA PREVISTA", unidad=None,
+                que_mide="Lo que perderías si el precio cae hasta el nivel de protección.")
+    if p["down"] is None:
+        perd.update(valor_fmt="—", estado=SIN_DATO(), pct_meter=None, frase=_SIN_DATO_FRASE)
+    else:
+        d = abs(p["down"])
+        perd["valor_fmt"] = f"{p['down']:+.1f}%"
+        perd["pct_meter"] = _meter_pct(d, 0, 25, invert=True)
+        if d <= 8:    perd.update(estado=BIEN(), frase="Si sale mal, la caída hasta el nivel de protección es pequeña y controlada.")
+        elif d <= 15: perd.update(estado=REGULAR(), frase="Si sale mal, la caída hasta el nivel de protección es moderada: hay que asumirla antes de entrar.")
+        else:         perd.update(estado=MAL(), frase="Si sale mal, la caída hasta el nivel de protección es grande: el margen de error es amplio.")
+    return [etapa, rr, perd]
+
+
+# ═════════════════════════════════════════════════════════════════════════
+# «En pocas palabras»: la IA primero, reglas de respaldo, y NUNCA cifras
+# ═════════════════════════════════════════════════════════════════════════
+_MAX_POCAS = {"global": 270, "negocio": 230, "momento": 230}
+
+
+def _sin_cifras(texto, max_chars=230):
+    """Devuelve la frase limpia o None si no vale: vacía, con cualquier dígito,
+    porcentaje o símbolo de dinero, o demasiado larga (se corta por oración)."""
+    t = _limpiar(texto)
+    t = re.sub(r"\s+", " ", t).strip()
+    if not t or re.search(r"[0-9%$€]", t):
+        return None
+    if len(t) > max_chars:
+        t = _truncate_by_sentence(t, max_chars)
+        if re.search(r"[0-9%$€]", t) or len(t) < 40:
+            return None
+    if t[-1] not in ".!?…":
+        t += "."
+    return t[0].upper() + t[1:]
+
+
+def _moat_txt(a) -> str:
+    m = str(_km(_rep(a, "future")).get("moat_strength") or "").lower()
+    if "wide" in m:   return "con una ventaja competitiva difícil de copiar"
+    if "narrow" in m: return "con una ventaja competitiva limitada que hay que vigilar"
+    if m:             return "sin una ventaja clara frente a sus rivales"
+    return ""
+
+
+def _reglas_global(a) -> str:
+    lq = _to_float(getattr(a, "long_term_quality_score", None))
+    if lq is None:
+        lq = _to_float(getattr(a, "composite_score", None), default=50.0)
+    moat = _moat_txt(a)
+    if lq >= 70:   neg = "Es un negocio de calidad"
+    elif lq >= 55: neg = "Es un negocio correcto"
+    else:          neg = "El negocio muestra fragilidades importantes"
+    frase1 = f"{neg}, {moat}." if moat else f"{neg}."
+    d = str(getattr(a, "asymmetry_direction", "") or "").lower()
+    if "up" in d:     frase2 = "El precio de hoy deja margen a favor: lo que puede ganar supera lo que arriesga."
+    elif "down" in d: frase2 = "El precio de hoy arriesga más de lo que puede dar: mejor esperar."
+    elif "bal" in d:  frase2 = "El precio de hoy no regala nada: conviene esperar un mejor punto de entrada."
+    else:             frase2 = "Conviene mirar con calma el momento de entrada."
+    return f"{frase1} {frase2}"
+
+
+def _reglas_negocio(a) -> str:
+    specs = {k: s for k, s in zip(("growth", "roic", "margin", "fcf", "de", "pe"), _fundamentales_specs(a))}
+    g, r, d = specs["growth"]["estado"].nivel, specs["roic"]["estado"].nivel, specs["de"]["estado"].nivel
+    crece = {"bien": "crece con fuerza", "regular": "crece despacio", "mal": "está dejando de crecer"}.get(g, "")
+    gana = {"bien": "gana dinero de verdad", "regular": "gana dinero sin destacar", "mal": "hoy no gana dinero"}.get(r, "")
+    debe = {"bien": "debe poco", "regular": "debe una cantidad manejable", "mal": "debe demasiado"}.get(d, "")
+    partes = [x for x in (gana, crece) if x]
+    frase = "La empresa " + " y ".join(partes) if partes else "No pudimos medir bien el negocio esta vez"
+    if debe:
+        frase += f", y {debe}"
+    frase += "."
+    moat = _moat_txt(a)
+    if moat:
+        frase += f" Compite {moat}."
+    return frase
+
+
+def _reglas_momento(a) -> str:
+    et, rr, perd = _momento_specs(a)
+    t = {"bien": "El precio viene subiendo", "regular": "El precio no tiene una dirección clara",
+         "mal": "El precio viene bajando"}.get(et["estado"].nivel, "El precio no se pudo leer bien")
+    if rr["estado"].nivel == "bien":      c = "y lo que puedes ganar supera con claridad lo que arriesgas."
+    elif rr["estado"].nivel == "regular": c = "y premio y riesgo van bastante parejos: el precio de entrada importa."
+    elif rr["estado"].nivel == "mal":     c = "pero hoy arriesgas más de lo que puedes ganar."
+    else:                                 c = "y no pudimos medir la relación entre premio y riesgo."
+    return f"{t}, {c}"
+
+
+def _en_pocas_palabras(a) -> dict:
+    """{'global','negocio','momento'}: la frase de la IA si existe y NO trae
+    cifras; si no, la frase por reglas. Siempre devuelve las tres."""
+    ia = getattr(a, "en_pocas_palabras", None) or {}
+    ia = ia if isinstance(ia, dict) else {}
+    out = {}
+    for k, gen in (("global", _reglas_global), ("negocio", _reglas_negocio), ("momento", _reglas_momento)):
+        t = _sin_cifras(ia.get(k), _MAX_POCAS[k]) if ia.get(k) else None
+        if t is None:
+            try:
+                t = _sin_cifras(gen(a), _MAX_POCAS[k]) or gen(a)
+            except Exception:
+                t = "No pudimos resumir este punto esta vez."
+        out[k] = t
+    return out

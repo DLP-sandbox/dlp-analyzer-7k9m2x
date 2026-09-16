@@ -125,7 +125,8 @@ def dibujar_medidor(c, x, top, w, h, score, etiqueta="") -> bool:
     if r < 40:
         return False
     cx = x + w / 2
-    cy = top + 26 + r                      # centro del semicírculo (top-based)
+    sobra = max(0.0, h - (r + 118))        # aire sobrante → se reparte arriba y abajo
+    cy = top + 26 + sobra / 2 + r          # centro del semicírculo (top-based)
     grosor = max(14, r * 0.17)
 
     # Riel de fondo + bandas de calidad

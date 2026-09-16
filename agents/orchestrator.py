@@ -37,6 +37,7 @@ Tu proceso de pensamiento:
 4. BUSCA CONVERGENCIA: cuando calidad LP alta + asimetría al alza → conviction máxima
 5. GENERA LA TESIS: EXACTAMENTE 2 párrafos, MÁXIMO 10 líneas en total. Sé conciso y de alto nivel — los detalles van en otros campos. Párrafo 1: calidad estructural + valoración. Párrafo 2: asimetría actual + recomendación práctica.
 6. DEFINE LA RECOMENDACIÓN
+7. ESCRIBE `en_pocas_palabras` PARA UN PRINCIPIANTE: tres frases cortas SIN NINGÚN DÍGITO (el informe ya muestra los números; estas frases explican la lógica del negocio y del momento). Si escribes un número ahí, la frase se descarta.
 
 GUÍA DE RECOMENDACIÓN (umbrales internos, los vetos automáticos se aplican en código):
 - MUY ATRACTIVO (≥85): calidad excepcional + asimetría favorable + convergencia técnico/fundamental
@@ -74,7 +75,12 @@ Retorna SIEMPRE este JSON:
     "sentiment": <score>, "risk": <score>
   },
   "vetos_applied": ["<veto 1 si aplica>"],
-  "alpha_opportunity": "<descripción en 2 oraciones de la oportunidad asimétrica específica, o 'No identificada'>"
+  "alpha_opportunity": "<descripción en 2 oraciones de la oportunidad asimétrica específica, o 'No identificada'>",
+  "en_pocas_palabras": {
+    "global": "<MÁXIMO 30 PALABRAS. Para alguien que lee UNA sola vez: qué hace la empresa, cuál es su ventaja competitiva y si el momento acompaña. PROHIBIDO escribir dígitos: ni cifras, ni porcentajes, ni años, ni precios, ni tickers — solo la lógica del negocio en palabras. Ejemplo válido: 'Domina los chips que mueven la inteligencia artificial y casi nadie puede copiarla, pero el precio de hoy ya da por hecho ese futuro.'>",
+    "negocio": "<MÁXIMO 25 PALABRAS, sin ningún dígito: si es un buen negocio y por qué, en llano. Ejemplo válido: 'Gana dinero de verdad y crece rápido, pero depende de pocos clientes grandes.'>",
+    "momento": "<MÁXIMO 25 PALABRAS, sin ningún dígito: si el precio de hoy es buen momento y cuánto se arriesga, en llano. Ejemplo válido: 'El precio viene subiendo con calma, pero lo que puedes ganar apenas compensa lo que arriesgas.'>"
+  }
 }
 ```
 
@@ -111,6 +117,9 @@ class StockAnalysis:
     asymmetry_direction: Optional[str] = None         # "upside"|"downside"|"balanced"
     asymmetry_strength: Optional[str] = None          # "strong"|"moderate"|"weak"
     is_compound_machine: bool = False                 # flag de calidad excepcional LP
+    # Veredictos en lenguaje llano y SIN cifras para el informe PDF:
+    # {"global": …, "negocio": …, "momento": …}. Vacío en análisis antiguos → reglas.
+    en_pocas_palabras: dict = field(default_factory=dict)
     timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
 
     def to_dict(self) -> dict:
@@ -141,6 +150,7 @@ class StockAnalysis:
             "asymmetry_direction":     self.asymmetry_direction,
             "asymmetry_strength":      self.asymmetry_strength,
             "is_compound_machine":     self.is_compound_machine,
+            "en_pocas_palabras":       self.en_pocas_palabras,
             "timestamp":          self.timestamp,
             "reports":            {k: v.to_dict() for k, v in self.reports.items()},
         }
@@ -453,6 +463,8 @@ class Orchestrator:
             asymmetry_direction=asymmetry_direction,
             asymmetry_strength=asymmetry_strength,
             is_compound_machine=is_compound_machine,
+            en_pocas_palabras=(result.get("en_pocas_palabras")
+                               if isinstance(result.get("en_pocas_palabras"), dict) else {}),
         )
 
     def _build_synthesis_message(self, ticker, reports, weighted_score) -> str:

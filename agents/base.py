@@ -471,7 +471,7 @@ _CAMPOS_NARRATIVOS = {
     "time_horizon", "key_insight", "dominant_narrative", "opportunity",
     "macro_verdict", "top_catalyst", "entry_setup", "stop_rationale",
     "dcf_thesis", "earnings_quality_note", "future_thesis", "verdict",
-    "upcoming_events", "recent_material_events",
+    "upcoming_events", "recent_material_events", "en_pocas_palabras",
 }
 
 

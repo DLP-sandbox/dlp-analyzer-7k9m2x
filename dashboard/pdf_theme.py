@@ -2,7 +2,7 @@
 dashboard/pdf_theme.py — Sistema de diseño del Informe DLP (PDF).
 
 Paleta (espejo de los tokens de styles.py / charts.py), tipografía de marca,
-geometría común de las 7 páginas y los componentes vectoriales reutilizables
+geometría común de las páginas y los componentes vectoriales reutilizables
 (tarjetas, semáforos, termómetros, barras nativas, píldoras, tiles, iconos).
 
 Reglas duras de este módulo:
@@ -578,7 +578,7 @@ def _pill(c, x, top, w, h, label, value, estado: Estado, reading=None, *,
               font=FONT_REG, size=12, color=TEXT_MD)
 
 
-def _metric_tile(c, x, top, w, h, spec: dict):
+def _metric_tile(c, x, top, w, h, spec: dict, *, compact=False):
     """Tile de métrica fundamental: etiqueta · semáforo · valor · termómetro ·
     frase explicativa · «qué mide». `spec` lo produce pdf_rules._evaluar_metrica."""
     estado: Estado = spec["estado"]
@@ -603,8 +603,9 @@ def _metric_tile(c, x, top, w, h, spec: dict):
     _meter(c, x + 24, top + 120, w - 48, spec.get("pct_meter"), estado.color)
 
     next_top = _wrap(c, spec["frase"], x + 24, top + 166, w - 48, font=FONT_REG,
-                     size=14, color=TEXT_MD, line_height=1.38, max_lines=3)
-    que = spec.get("que_mide")
+                     size=14.5 if compact else 14, color=TEXT_MD, line_height=1.38,
+                     max_lines=2 if compact else 3)
+    que = None if compact else spec.get("que_mide")
     if que:
         qy = max(next_top + 14, top + h - 58)
         _text(c, "QUÉ MIDE", x + 24, qy, font=FONT_DISPLAY, size=9.5, color=TEXT_DIM,

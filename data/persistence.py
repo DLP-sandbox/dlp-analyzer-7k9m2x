@@ -289,6 +289,7 @@ def stock_analysis_from_dict(d: dict):
             asymmetry_direction=d.get("asymmetry_direction"),
             asymmetry_strength=d.get("asymmetry_strength"),
             is_compound_machine=bool(d.get("is_compound_machine", False)),
+            en_pocas_palabras=dict(d.get("en_pocas_palabras") or {}),
             timestamp=d.get("timestamp", datetime.now().isoformat()),
         )
     except Exception:

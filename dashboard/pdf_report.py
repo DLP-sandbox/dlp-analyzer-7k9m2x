@@ -1,15 +1,15 @@
 """
 dashboard/pdf_report.py — Informe DLP en PDF (fachada).
 
-Genera un informe de 7 páginas landscape 16:9 (1920×1080 pt) con navegación
-clicable e índice del lector:
-  1. Veredicto      — hero, medidor, perfil, desglose nativo, tesis, precios
-  2. Fundamentales  — seis métricas con semáforo y frase, pilares, señales
-  3. Técnico        — tendencia, etapa/RSI/MACD/máximo anual, frente al mercado
-  4. Futuro + Smart Money
-  5. Contexto       — catalizadores, macro, sentimiento
-  6. Riesgo         — recorrido del precio, niveles, plan de la posición
-  7. Conclusión     — a favor / en contra, entrada y salida, Club DLP
+Genera un informe de 3 páginas landscape 16:9 (1920×1080 pt), pensado para que
+un principiante lo lea UNA vez y lo entienda, con navegación clicable e índice:
+  1. Veredicto    — quién es la empresa, el puntaje, dos gráficas y «en pocas palabras»
+  2. El negocio   — 3 datos con semáforo y frase SIN cifras, los pilares y la lectura
+  3. El momento   — 3 datos, el recorrido del precio, la lectura y el Club DLP
+Las frases «en pocas palabras» las escribe la IA en el análisis (campo
+`en_pocas_palabras`) y se imprimen solo si no traen ninguna cifra; si faltan o
+traen números, se generan por reglas. Ninguna frase del informe lleva datos: el
+número va arriba y la frase explica qué significa.
 
 Garantías del módulo:
   · CERO llamadas a Anthropic. Ni este módulo ni pdf_theme / pdf_rules /
@@ -40,7 +40,7 @@ from dashboard.pdf_vector import (  # noqa: F401
 
 
 def build_analysis_pdf(analysis) -> bytes:
-    """Genera el informe de 7 páginas y devuelve los bytes del PDF."""
+    """Genera el informe de 3 páginas y devuelve los bytes del PDF."""
     buf = io.BytesIO()
     try:
         # Fuente inicial de marca: así ninguna página declara Helvetica.
